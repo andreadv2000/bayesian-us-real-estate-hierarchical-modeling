@@ -6,10 +6,13 @@ This repository contains a reproducible final-project scaffold for a fully Bayes
 
 - Dataset: [USA Real Estate Dataset](https://www.kaggle.com/datasets/ahmedshahriarsakib/usa-real-estate-dataset)
 - Kaggle dataset version: 25
-- Download date: pending
-- Raw-file checksum: pending
+- Download date: 2026-06-21
+- Raw CSV: `data/raw/realtor-data.csv`
+- Raw CSV size: 178,858,272 bytes (170.6 MiB)
+- MD5 checksum: `09ce5bd36ef648a5769a996735c05951`
+- Verified CSV columns: `brokered_by`, `status`, `price`, `bed`, `bath`, `acre_lot`, `street`, `city`, `state`, `zip_code`, `house_size`, and `prev_sold_date`.
 
-The unmodified dataset will be stored locally at data/raw/realtor-data.csv and is deliberately excluded from version control.
+The version-25 Kaggle archive was downloaded on the date above, extracted locally, and preserved without opening or resaving the CSV. The raw data are deliberately excluded from version control.
 
 ## Planned model sequence
 
@@ -36,4 +39,4 @@ The response is log listing price. Planned covariates are log living area, log l
 
 ## Current scope
 
-Only the reproducible project structure has been created. Data import, package locking, model code, and analysis execution are intentionally deferred to later implementation phases.
+The raw dataset has been downloaded and catalogued. Data import, model code, and analysis execution are intentionally deferred to later implementation phases.
