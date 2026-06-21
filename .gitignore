@@ -1,0 +1,16 @@
+# Raw and derived data
+data/raw/
+data/processed/
+
+# Large MCMC artifacts and runtime logs
+output/mcmc/
+output/logs/
+
+# R and IDE state
+.Rhistory
+.RData
+.Rproj.user/
+
+# Local planning documents (intentionally not versioned)
+/PROJECT_BLUEPRINT.md
+/IMPLEMENTATION_GUIDE.md
