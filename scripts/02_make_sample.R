@@ -101,3 +101,115 @@ message(
   "Missing log-acre-lot fraction among core-valid rows: ",
   format(lot_size_missing_fraction, digits = 4)
 )
+
+# Freeze a balanced, computationally tractable MCMC sample.  The state--ZIP
+# hierarchy is sampled first so every retained ZIP contributes the same number
+# of listings and has observations in both the training and test partitions.
+required_sampling_packages <- "arrow"
+missing_sampling_packages <- required_sampling_packages[!vapply(
+  required_sampling_packages,
+  requireNamespace,
+  quietly = TRUE,
+  FUN.VALUE = logical(1)
+)]
+if (length(missing_sampling_packages) > 0) {
+  stop(
+    "Install the package(s) required for stratified sampling: ",
+    paste(missing_sampling_packages, collapse = ", ")
+  )
+}
+
+set.seed(20260621)
+
+N_STATES <- 25L
+N_ZIPS_PER_STATE <- 24L
+N_PER_ZIP <- 30L
+N_TRAIN_PER_ZIP <- 24L
+
+eligible_zips <- analysis_frame |>
+  dplyr::count(state, zip_id, name = "n_available") |>
+  dplyr::filter(n_available >= N_PER_ZIP)
+
+eligible_states <- eligible_zips |>
+  dplyr::count(state, name = "n_eligible_zips") |>
+  dplyr::filter(n_eligible_zips >= N_ZIPS_PER_STATE)
+
+if (nrow(eligible_states) < N_STATES) {
+  stop(
+    "The modelling frame has only ", nrow(eligible_states),
+    " states with at least ", N_ZIPS_PER_STATE,
+    " ZIP codes containing ", N_PER_ZIP, " listings; ",
+    N_STATES, " are required."
+  )
+}
+
+selected_states <- eligible_states |>
+  dplyr::slice_sample(n = N_STATES) |>
+  dplyr::select(state)
+
+selected_zips <- eligible_zips |>
+  dplyr::semi_join(selected_states, by = "state") |>
+  dplyr::group_by(state) |>
+  dplyr::slice_sample(n = N_ZIPS_PER_STATE) |>
+  dplyr::ungroup()
+
+analysis_sample <- analysis_frame |>
+  dplyr::semi_join(selected_zips, by = c("state", "zip_id")) |>
+  dplyr::group_by(state, zip_id) |>
+  dplyr::slice_sample(n = N_PER_ZIP) |>
+  dplyr::mutate(
+    split = sample(
+      c(
+        rep("train", N_TRAIN_PER_ZIP),
+        rep("test", N_PER_ZIP - N_TRAIN_PER_ZIP)
+      ),
+      size = N_PER_ZIP,
+      replace = FALSE
+    )
+  ) |>
+  dplyr::ungroup()
+
+sample_manifest <- analysis_sample |>
+  dplyr::count(state, zip_id, split, name = "n") |>
+  dplyr::arrange(state, zip_id, split)
+
+train_per_zip <- analysis_sample |>
+  dplyr::filter(split == "train") |>
+  dplyr::count(state, zip_id, name = "n")
+test_per_zip <- analysis_sample |>
+  dplyr::filter(split == "test") |>
+  dplyr::count(state, zip_id, name = "n")
+
+stopifnot(
+  nrow(analysis_sample) == N_STATES * N_ZIPS_PER_STATE * N_PER_ZIP,
+  dplyr::n_distinct(analysis_sample$state) == N_STATES,
+  dplyr::n_distinct(analysis_sample$zip_id) == N_STATES * N_ZIPS_PER_STATE,
+  all(train_per_zip$n == N_TRAIN_PER_ZIP),
+  all(test_per_zip$n == N_PER_ZIP - N_TRAIN_PER_ZIP)
+)
+
+processed_dir <- here::here("data", "processed")
+dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+
+readr::write_csv(
+  sample_manifest,
+  file.path(processed_dir, "sample_manifest.csv")
+)
+arrow::write_parquet(
+  analysis_sample,
+  file.path(processed_dir, "analysis_sample.parquet")
+)
+
+sample_validation <- list(
+  n_rows = nrow(analysis_sample),
+  n_train = sum(analysis_sample$split == "train"),
+  n_test = sum(analysis_sample$split == "test"),
+  n_states = dplyr::n_distinct(analysis_sample$state),
+  n_zips = dplyr::n_distinct(analysis_sample$zip_id),
+  train_per_zip = sort(unique(train_per_zip$n)),
+  test_per_zip = sort(unique(test_per_zip$n))
+)
+print(sample_validation)
+message(
+  "Balanced MCMC sample complete. Manifest and Parquet data: ", processed_dir
+)
