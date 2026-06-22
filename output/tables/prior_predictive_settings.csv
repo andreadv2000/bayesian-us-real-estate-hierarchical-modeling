@@ -1,0 +1,2 @@
+"n_prior_draws","seed","alpha_sd","beta_sd","sigma_sd","sd_state_sd","sd_zip_sd","revision_reason"
+200,20260621,1,0.03,0.5,0.3,0.3,"Original scales generated pathological prior-predictive price ranges with extreme standardized covariates."
