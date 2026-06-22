@@ -1,0 +1,14 @@
+model {
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu[i], tau_y)
+    mu[i] <- alpha + inprod(beta[], X[i,])
+  }
+
+  alpha ~ dnorm(0, 0.16)
+  for (p in 1:P) {
+    beta[p] ~ dnorm(0, 1)
+  }
+
+  sigma ~ dnorm(0, 1) T(0,)
+  tau_y <- pow(sigma, -2)
+}
