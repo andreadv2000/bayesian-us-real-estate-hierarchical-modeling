@@ -128,7 +128,11 @@ saveRDS(fit_m0$draws, file.path(mcmc_output_dir, "m0_draws.rds"))
 saveRDS(fit_m1$draws, file.path(mcmc_output_dir, "m1_draws.rds"))
 saveRDS(fit_m2$draws, file.path(mcmc_output_dir, "m2_draws.rds"))
 
+source(here::here("scripts", "07_model_comparison.R"))
+dic_results <- calculate_and_write_dic(fit_m0, fit_m1, fit_m2)
+
 message(
-  "Saved four-chain production draws for M0, M1, and M2 to ",
-  mcmc_output_dir, "."
+  "Saved four-chain production draws to ", mcmc_output_dir,
+  " and the DIC comparison to ", here::here("output", "tables", "model_comparison_dic.csv"),
+  "."
 )
