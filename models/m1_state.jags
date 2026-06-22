@@ -1,0 +1,20 @@
+model {
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu[i], tau_y)
+    mu[i] <- alpha + inprod(beta[], X[i,]) + u[state[i]]
+  }
+
+  alpha ~ dnorm(0, 0.16)
+  for (p in 1:P) {
+    beta[p] ~ dnorm(0, 1)
+  }
+
+  for (s in 1:S) {
+    u[s] ~ dnorm(0, tau_state)
+  }
+  sd_state ~ dnorm(0, 1) T(0,)
+  tau_state <- pow(sd_state, -2)
+
+  sigma ~ dnorm(0, 1) T(0,)
+  tau_y <- pow(sigma, -2)
+}
