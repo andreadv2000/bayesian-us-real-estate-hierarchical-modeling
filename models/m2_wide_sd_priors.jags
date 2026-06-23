@@ -1,0 +1,31 @@
+model {
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu[i], tau_y)
+    mu[i] <- alpha + inprod(beta[], X[i,]) + u[state[i]] + v[zip[i]]
+  }
+
+  # Fixed-effect priors are intentionally identical to the production M2.
+  alpha ~ dnorm(0, 1)
+  for (p in 1:P) {
+    beta[p] ~ dnorm(0, 1111.111111)
+  }
+
+  for (s in 1:S) {
+    u[s] ~ dnorm(0, tau_state)
+  }
+  # Sensitivity prior: half-normal scale 0.6, twice the production scale 0.3.
+  sd_state ~ dnorm(0, 2.777777778) T(0,)
+  tau_state <- pow(sd_state, -2)
+
+  for (z in 1:Z) {
+    v[z] ~ dnorm(0, tau_zip)
+  }
+  # Sensitivity prior: half-normal scale 0.6, twice the production scale 0.3.
+  sd_zip ~ dnorm(0, 2.777777778) T(0,)
+  tau_zip <- pow(sd_zip, -2)
+
+  # The residual-SD prior remains fixed so this isolates geographic-prior
+  # sensitivity; its production half-normal scale is 0.5.
+  sigma ~ dnorm(0, 4) T(0,)
+  tau_y <- pow(sigma, -2)
+}
