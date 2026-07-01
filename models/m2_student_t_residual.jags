@@ -1,0 +1,40 @@
+model {
+  for (i in 1:N) {
+    y[i] ~ dt(mu[i], tau_y, nu)
+    mu[i] <- alpha + inprod(beta[], X[i,]) + u[state[i]] + v[zip[i]]
+  }
+
+  alpha ~ dnorm(0, 1)
+  for (p in 1:P) {
+    beta[p] ~ dnorm(0, 1111.111111)
+  }
+
+  for (s in 1:S) {
+    u_raw[s] ~ dnorm(0, tau_state)
+    u[s] <- u_raw[s] - u_mean
+  }
+  u_mean <- sum(u_raw[]) / S
+  sd_state ~ dnorm(0, 11.111111) T(0,)
+  tau_state <- pow(sd_state, -2)
+
+  for (z in 1:Z) {
+    v_raw[z] ~ dnorm(0, tau_zip)
+    v[z] <- v_raw[z] - v_state_mean[zip_state[z]]
+  }
+  for (s in 1:S) {
+    for (k in 1:K) {
+      v_state_member[s,k] <- v_raw[zip_in_state[s,k]] * zip_in_state_weight[s,k]
+    }
+    v_state_sum[s] <- sum(v_state_member[s,])
+    v_state_mean[s] <- v_state_sum[s] / n_zips_by_state[s]
+  }
+  sd_zip ~ dnorm(0, 11.111111) T(0,)
+  tau_zip <- pow(sd_zip, -2)
+
+  sigma ~ dnorm(0, 4) T(0,)
+  tau_y <- pow(sigma, -2)
+
+  # The lower bound gives the Student-t residual distribution finite variance.
+  nu_minus_two ~ dexp(0.033333333)
+  nu <- nu_minus_two + 2
+}

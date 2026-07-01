@@ -1,0 +1,16 @@
+model {
+  for (i in 1:N) {
+    y[i] ~ dnorm(mu[i], tau_y)
+    mu[i] <- alpha + inprod(beta[], X[i,])
+  }
+
+  # Prior-predictive calibration: alpha SD = 1 and beta SD = 0.03.
+  alpha ~ dnorm(0, 1)
+  for (p in 1:P) {
+    beta[p] ~ dnorm(0, 1111.111111)
+  }
+
+  # Half-normal residual SD prior with scale 0.5.
+  sigma ~ dnorm(0, 4) T(0,)
+  tau_y <- pow(sigma, -2)
+}

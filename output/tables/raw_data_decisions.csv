@@ -1,0 +1,6 @@
+"topic","decision","audit_evidence"
+"listing_status","Use status as a categorical predictor; do not restrict the audit to one listing status.","3 observed status levels are present and status is a planned covariate."
+"lot_size","Retain acre_lot as a core covariate using log1p on observed nonnegative values; use a complete-case analysis rather than median imputation.","acre_lot is a planned covariate; 14.62% of raw values are missing and 2,226 values are zero, which log1p can represent."
+"exact_duplicates","Retain all records: the audit found no exact duplicate rows.","0 exact duplicates among 2,226,382 raw rows."
+"impossible_price_and_house_size","Exclude non-positive price and non-positive house_size when constructing the modelling frame.","280 prices are zero and 0 are negative; 0 house-size values are non-positive."
+"high_price_outliers","Do not remove expensive homes solely for being extreme; model price on the log scale.","The audit records distributions without defining an upper price cutoff."

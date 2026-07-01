@@ -1,0 +1,26 @@
+zip_index,state,zip_code,zip_id,label,jags_parameter,training_listings,posterior_median,lower_95,upper_95,prob_positive,selection_rule
+1,Arizona,85012,Arizona__85012,Arizona — 85012,v[1],24,0.31872635011361017,0.12163756594807848,0.5158135158090142,0.9992125,Top 25 ZIPs by training listings; ties by state then ZIP code.
+2,Arizona,85017,Arizona__85017,Arizona — 85017,v[2],24,-0.11318058666506298,-0.3085293575879714,0.08465770443578245,0.1300625,Top 25 ZIPs by training listings; ties by state then ZIP code.
+3,Arizona,85045,Arizona__85045,Arizona — 85045,v[3],24,0.12164476462810009,-0.07391944566607532,0.31721696208908134,0.88745,Top 25 ZIPs by training listings; ties by state then ZIP code.
+4,Arizona,85048,Arizona__85048,Arizona — 85048,v[4],24,0.2157263966086137,0.019177320265567288,0.412949081664808,0.984325,Top 25 ZIPs by training listings; ties by state then ZIP code.
+5,Arizona,85053,Arizona__85053,Arizona — 85053,v[5],24,-0.05879303556239272,-0.2549960019627298,0.138227812911735,0.2799875,Top 25 ZIPs by training listings; ties by state then ZIP code.
+6,Arizona,85254,Arizona__85254,Arizona — 85254,v[6],24,0.3806752726579432,0.1840198159088236,0.5756984696198569,0.9999125,Top 25 ZIPs by training listings; ties by state then ZIP code.
+7,Arizona,85255,Arizona__85255,Arizona — 85255,v[7],24,0.7853643238787431,0.588270446342092,0.9819286271683719,1,Top 25 ZIPs by training listings; ties by state then ZIP code.
+8,Arizona,85262,Arizona__85262,Arizona — 85262,v[8],24,0.74258328762316,0.5460290858581635,0.9406948567945513,1,Top 25 ZIPs by training listings; ties by state then ZIP code.
+9,Arizona,85283,Arizona__85283,Arizona — 85283,v[9],24,0.10793308848643607,-0.08904334232265351,0.3054213558828745,0.858875,Top 25 ZIPs by training listings; ties by state then ZIP code.
+10,Arizona,85295,Arizona__85295,Arizona — 85295,v[10],24,0.1196150938317146,-0.07664497888278221,0.316544394289536,0.8836,Top 25 ZIPs by training listings; ties by state then ZIP code.
+11,Arizona,85303,Arizona__85303,Arizona — 85303,v[11],24,-0.005518930559343651,-0.20138783084545736,0.193248232833136,0.478475,Top 25 ZIPs by training listings; ties by state then ZIP code.
+12,Arizona,85306,Arizona__85306,Arizona — 85306,v[12],24,0.013082960161967416,-0.18388745327759995,0.2089354589514746,0.5520125,Top 25 ZIPs by training listings; ties by state then ZIP code.
+13,Arizona,85356,Arizona__85356,Arizona — 85356,v[13],24,-0.6590556938058976,-0.8562612370613579,-0.46094723134423204,0,Top 25 ZIPs by training listings; ties by state then ZIP code.
+14,Arizona,85377,Arizona__85377,Arizona — 85377,v[14],24,0.4701353921536171,0.27187897446297893,0.6663501147836053,1,Top 25 ZIPs by training listings; ties by state then ZIP code.
+15,Arizona,85388,Arizona__85388,Arizona — 85388,v[15],24,0.02903480979036245,-0.16757639822843579,0.2242986848092462,0.615,Top 25 ZIPs by training listings; ties by state then ZIP code.
+16,Arizona,85553,Arizona__85553,Arizona — 85553,v[16],24,-0.3907731889691807,-0.5876590852761713,-0.1935146771714326,8.75e-5,Top 25 ZIPs by training listings; ties by state then ZIP code.
+17,Arizona,85622,Arizona__85622,Arizona — 85622,v[17],24,-0.21544363232651637,-0.41148115847890065,-0.019213763067966756,0.0154125,Top 25 ZIPs by training listings; ties by state then ZIP code.
+18,Arizona,85629,Arizona__85629,Arizona — 85629,v[18],24,-0.39122260340538234,-0.5875098118218903,-0.19277570808975125,3.75e-5,Top 25 ZIPs by training listings; ties by state then ZIP code.
+19,Arizona,85713,Arizona__85713,Arizona — 85713,v[19],24,-0.3870364062415057,-0.582446219496831,-0.19087628030760775,2.5e-5,Top 25 ZIPs by training listings; ties by state then ZIP code.
+20,Arizona,85745,Arizona__85745,Arizona — 85745,v[20],24,-0.19358504420578876,-0.388444730031341,0.0034400169685128643,0.0272,Top 25 ZIPs by training listings; ties by state then ZIP code.
+21,Arizona,85756,Arizona__85756,Arizona — 85756,v[21],24,-0.3835170005203997,-0.581882597824615,-0.18931456986577477,6.25e-5,Top 25 ZIPs by training listings; ties by state then ZIP code.
+22,Arizona,86301,Arizona__86301,Arizona — 86301,v[22],24,0.16691795503479406,-0.029821525911058498,0.3637621337993424,0.9527375,Top 25 ZIPs by training listings; ties by state then ZIP code.
+23,Arizona,86320,Arizona__86320,Arizona — 86320,v[23],24,-0.7674144144934543,-0.9648845731796383,-0.56690235287974,0,Top 25 ZIPs by training listings; ties by state then ZIP code.
+24,Arizona,86325,Arizona__86325,Arizona — 86325,v[24],24,0.0919787684586291,-0.10433864906170966,0.2881769680731873,0.818975,Top 25 ZIPs by training listings; ties by state then ZIP code.
+25,California,90038,California__90038,California — 90038,v[25],24,0.33192758061553357,0.1348979912301325,0.5256262415274424,0.999375,Top 25 ZIPs by training listings; ties by state then ZIP code.

@@ -1,0 +1,4 @@
+analysis,status
+Prior sensitivity,Run: M2 with wider proper geographic-SD priors (half-normal scale 0.6 vs 0.3).
+Lot-size complete-case sensitivity,Not run: log acre lot is already in the core M0-M2 design matrix.
+Student-t residual extension,"Not run: no clear normal-residual posterior-predictive failure was confirmed. models/m2_student_t_residual.jags is available only if that evidence is documented; then refit on the frozen sample and rerun diagnostics, held-out evaluation, and posterior predictive checks."

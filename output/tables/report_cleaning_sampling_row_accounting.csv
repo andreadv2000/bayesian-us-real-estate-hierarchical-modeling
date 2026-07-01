@@ -1,0 +1,9 @@
+stage,n
+Raw rows,2226382
+Core valid rows,1605398
+Lot-size complete rows,1360626
+Frozen balanced sample,18000
+Frozen training sample,14400
+Frozen held-out sample,3600
+Selected states,25
+Selected state--ZIP groups,600

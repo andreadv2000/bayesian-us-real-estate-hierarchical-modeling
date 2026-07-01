@@ -1,0 +1,11 @@
+setting,value
+n_chains,4
+n_adapt,2000
+n_burn,5000
+n_iter,10000
+thin,1
+max_predictive_draws,2000
+seed,20260622
+chunk_iter,500
+force,0
+strict_convergence,0
