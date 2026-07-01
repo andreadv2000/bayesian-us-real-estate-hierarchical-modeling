@@ -1,0 +1,11 @@
+component_type,component,parameter,posterior_median,lower_95,upper_95,posterior_probability,units
+Fixed effect,log_house_size_z,beta[1],0.402411584740085,0.38948148652296943,0.4153051081799563,1,standardized log-price units
+Fixed effect,log_acre_lot_z,beta[2],0.10155550245667816,0.0915125730385335,0.1115248222082552,1,standardized log-price units
+Fixed effect,bed_z,beta[3],-0.00271015359168528,-0.01459917876023027,0.00914698235410929,0.323525,standardized log-price units
+Fixed effect,bath_z,beta[4],0.07718276114996929,0.06601024359816707,0.08829253683362631,1,standardized log-price units
+Fixed effect,statussold,beta[5],-0.07178578707352702,-0.09088086680914428,-0.05278245856419413,0,standardized log-price units
+Variance component,Residual SD,NA,0.5153959036006045,0.5093461389486492,0.5215351993326549,NA,standardized log-price units
+Variance component,State SD,NA,0.4712436882305901,0.3675288214838689,0.6269335544779324,NA,standardized log-price units
+Variance component,ZIP SD,NA,0.4526018461257023,0.42636094203449,0.4813977777509916,NA,standardized log-price units
+Variance component,ZIP SD - State SD,NA,-0.01839306887894817,-0.1771312532786983,0.0891090754055164,0.38585,standardized log-price units
+Variance component,P(ZIP SD > State SD),NA,NA,NA,NA,0.38585,standardized log-price units

@@ -1,0 +1,3 @@
+"model","label","status","output_path","elapsed_seconds"
+"M1","M1: state sum-to-zero","fitted","C:/Users/andre/Desktop/Final-FSLII/output/mcmc/m1_draws.rds",4216.78219389915
+"M2","M2: centered state + within-state centered ZIP","fitted","C:/Users/andre/Desktop/Final-FSLII/output/mcmc/m2_draws.rds",47248.7891349792

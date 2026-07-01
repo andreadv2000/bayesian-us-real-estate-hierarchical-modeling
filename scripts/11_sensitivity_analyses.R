@@ -41,6 +41,34 @@ validate_sensitivity_integer <- function(value, name) {
   as.integer(value)
 }
 
+read_sensitivity_integer <- function(name, default) {
+  value <- Sys.getenv(name, unset = "")
+  if (!nzchar(value)) {
+    return(as.integer(default))
+  }
+
+  parsed <- suppressWarnings(as.integer(value))
+  validate_sensitivity_integer(parsed, name)
+}
+
+read_sensitivity_flag <- function(name, default = FALSE) {
+  value <- tolower(trimws(Sys.getenv(name, unset = "")))
+  if (!nzchar(value)) {
+    return(default)
+  }
+  if (value %in% c("1", "true", "yes")) {
+    return(TRUE)
+  }
+  if (value %in% c("0", "false", "no")) {
+    return(FALSE)
+  }
+  stop("Environment variable `", name, "` must be true or false.", call. = FALSE)
+}
+
+timestamp_message <- function(...) {
+  message(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " | ", ...)
+}
+
 validate_mcmc_settings <- function(n_chains, n_adapt, n_burn, n_iter, thin) {
   settings <- c(n_chains, n_adapt, n_burn, n_iter, thin)
   setting_names <- c("n_chains", "n_adapt", "n_burn", "n_iter", "thin")
@@ -84,10 +112,149 @@ make_m2_initial_values <- function(data_list, n_chains, seed) {
   })
 }
 
+augment_zip_centering_data <- function(data_list) {
+  required_data <- c("N", "S", "Z", "state", "zip")
+  missing_data <- setdiff(required_data, names(data_list))
+  if (length(missing_data) > 0L) {
+    stop(
+      "Cannot build ZIP centering data because JAGS data are missing: ",
+      paste(missing_data, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  zip_state <- vapply(seq_len(data_list$Z), function(zip_id) {
+    states <- unique(as.integer(data_list$state[data_list$zip == zip_id]))
+    states <- states[!is.na(states)]
+    if (length(states) != 1L) {
+      stop("Each ZIP must map to exactly one state for M2 ZIP centering.", call. = FALSE)
+    }
+    states
+  }, integer(1L))
+  n_zips_by_state <- tabulate(zip_state, nbins = data_list$S)
+  if (any(n_zips_by_state < 1L)) {
+    stop("Every state must have at least one ZIP for M2 ZIP centering.", call. = FALSE)
+  }
+
+  k_max <- max(n_zips_by_state)
+  zip_in_state <- matrix(1L, nrow = data_list$S, ncol = k_max)
+  zip_in_state_weight <- matrix(0, nrow = data_list$S, ncol = k_max)
+  for (state_id in seq_len(data_list$S)) {
+    state_zips <- which(zip_state == state_id)
+    zip_in_state[state_id, seq_along(state_zips)] <- state_zips
+    zip_in_state_weight[state_id, seq_along(state_zips)] <- 1
+  }
+
+  data_list$K <- as.integer(k_max)
+  data_list$zip_state <- as.integer(zip_state)
+  data_list$n_zips_by_state <- as.integer(n_zips_by_state)
+  data_list$zip_in_state <- zip_in_state
+  data_list$zip_in_state_weight <- zip_in_state_weight
+  data_list
+}
+
+chunk_sizes <- function(total_iter, chunk_iter) {
+  total_iter <- validate_sensitivity_integer(total_iter, "total_iter")
+  chunk_iter <- validate_sensitivity_integer(chunk_iter, "chunk_iter")
+  starts <- seq.int(1L, total_iter, by = chunk_iter)
+  as.integer(pmin(chunk_iter, total_iter - starts + 1L))
+}
+
+stall_hint <- function(phase, chunk_iter) {
+  timestamp_message(
+    "Entering ", phase, " chunk of up to ", chunk_iter,
+    " JAGS iteration(s). If this message does not advance for a long time ",
+    "and Rscript CPU stays at 0, the process is likely stalled inside this ",
+    "JAGS call; interrupting will keep any previously saved final draw file, ",
+    "but not the currently active chunk."
+  )
+}
+
+run_update_chunks <- function(model, total_iter, chunk_iter, phase) {
+  chunks <- chunk_sizes(total_iter, chunk_iter)
+  for (chunk_id in seq_along(chunks)) {
+    stall_hint(phase, chunks[[chunk_id]])
+    started_at <- Sys.time()
+    stats::update(model, n.iter = chunks[[chunk_id]], progress.bar = "none")
+    elapsed <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+    timestamp_message(
+      "Finished ", phase, " chunk ", chunk_id, "/", length(chunks),
+      " (", chunks[[chunk_id]], " iteration(s)) in ",
+      round(elapsed, 1), " seconds."
+    )
+  }
+  invisible(model)
+}
+
+run_adapt_chunks <- function(model, total_iter, chunk_iter) {
+  chunks <- chunk_sizes(total_iter, chunk_iter)
+  for (chunk_id in seq_along(chunks)) {
+    stall_hint("adaptation", chunks[[chunk_id]])
+    started_at <- Sys.time()
+    adapted <- rjags::adapt(
+      object = model,
+      n.iter = chunks[[chunk_id]],
+      end.adaptation = chunk_id == length(chunks),
+      progress.bar = "none"
+    )
+    elapsed <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+    timestamp_message(
+      "Finished adaptation chunk ", chunk_id, "/", length(chunks),
+      " (", chunks[[chunk_id]], " iteration(s)) in ",
+      round(elapsed, 1), " seconds. Adapted=", adapted, "."
+    )
+  }
+  invisible(model)
+}
+
+combine_mcmc_chunks <- function(draw_chunks) {
+  if (length(draw_chunks) == 0L) {
+    stop("No MCMC chunks were sampled.", call. = FALSE)
+  }
+  n_chains <- length(draw_chunks[[1L]])
+  chains <- lapply(seq_len(n_chains), function(chain_id) {
+    combined <- do.call(rbind, lapply(draw_chunks, function(chunk) chunk[[chain_id]]))
+    if (!inherits(combined, "mcmc")) {
+      combined <- coda::mcmc(combined)
+    }
+    combined
+  })
+  coda::mcmc.list(chains)
+}
+
+sample_coda_chunks <- function(model, parameters, total_iter, thin,
+                               chunk_iter, partial_path = NULL) {
+  chunks <- chunk_sizes(total_iter, chunk_iter)
+  draw_chunks <- vector("list", length(chunks))
+  for (chunk_id in seq_along(chunks)) {
+    stall_hint("sampling", chunks[[chunk_id]])
+    started_at <- Sys.time()
+    draw_chunks[[chunk_id]] <- rjags::coda.samples(
+      model = model,
+      variable.names = parameters,
+      n.iter = chunks[[chunk_id]],
+      thin = thin,
+      progress.bar = "none"
+    )
+    elapsed <- as.numeric(difftime(Sys.time(), started_at, units = "secs"))
+    timestamp_message(
+      "Finished sampling chunk ", chunk_id, "/", length(chunks),
+      " (", chunks[[chunk_id]], " iteration(s)) in ",
+      round(elapsed, 1), " seconds."
+    )
+    if (!is.null(partial_path)) {
+      saveRDS(draw_chunks[seq_len(chunk_id)], partial_path)
+      timestamp_message("Saved partial sensitivity draw chunks to ", partial_path, ".")
+    }
+  }
+  combine_mcmc_chunks(draw_chunks)
+}
+
 fit_m2_sensitivity_model <- function(model_file, data_list, parameters,
                                      n_chains = 4L, n_adapt = 2000L,
                                      n_burn = 5000L, n_iter = 10000L,
-                                     thin = 1L, seed = 20260622L) {
+                                     thin = 1L, seed = 20260622L,
+                                     chunk_iter = 1000L,
+                                     partial_draws_path = NULL) {
   if (!file.exists(model_file)) {
     stop("JAGS model file not found: ", model_file, call. = FALSE)
   }
@@ -100,28 +267,43 @@ fit_m2_sensitivity_model <- function(model_file, data_list, parameters,
     )
   }
   settings <- validate_mcmc_settings(n_chains, n_adapt, n_burn, n_iter, thin)
+  chunk_iter <- validate_sensitivity_integer(chunk_iter, "chunk_iter")
   seed <- validate_sensitivity_integer(seed, "seed")
   if (!is.character(parameters) || length(parameters) == 0L) {
     stop("Provide at least one monitored parameter.", call. = FALSE)
   }
+  data_list <- augment_zip_centering_data(data_list)
 
   set.seed(seed)
   inits <- make_m2_initial_values(data_list, settings[["n_chains"]], seed)
+  timestamp_message("Compiling wider-prior M2 sensitivity JAGS model.")
   model <- rjags::jags.model(
     file = model_file,
     data = data_list,
     inits = inits,
     n.chains = settings[["n_chains"]],
-    n.adapt = settings[["n_adapt"]],
+    n.adapt = 0L,
     quiet = TRUE
   )
-  stats::update(model, n.iter = settings[["n_burn"]], progress.bar = "none")
-  draws <- rjags::coda.samples(
+  timestamp_message("Compiled wider-prior M2 sensitivity JAGS model.")
+  run_adapt_chunks(
     model = model,
-    variable.names = parameters,
-    n.iter = settings[["n_iter"]],
+    total_iter = settings[["n_adapt"]],
+    chunk_iter = chunk_iter
+  )
+  run_update_chunks(
+    model = model,
+    total_iter = settings[["n_burn"]],
+    chunk_iter = chunk_iter,
+    phase = "burn-in"
+  )
+  draws <- sample_coda_chunks(
+    model = model,
+    parameters = parameters,
+    total_iter = settings[["n_iter"]],
     thin = settings[["thin"]],
-    progress.bar = "none"
+    chunk_iter = chunk_iter,
+    partial_path = partial_draws_path
   )
   list(model = model, draws = draws, inits = inits, settings = settings)
 }
@@ -256,8 +438,16 @@ run_planned_sensitivity_analyses <- function(
     model_file = here::here("models", "m2_wide_sd_priors.jags"),
     mcmc_output_dir = here::here("output", "mcmc"),
     tables_dir = here::here("output", "tables"),
-    n_chains = 4L, n_adapt = 2000L, n_burn = 5000L, n_iter = 10000L,
-    thin = 1L, max_predictive_draws = 2000L, seed = 20260622L) {
+    n_chains = read_sensitivity_integer("SENS_N_CHAINS", 4L),
+    n_adapt = read_sensitivity_integer("SENS_N_ADAPT", 2000L),
+    n_burn = read_sensitivity_integer("SENS_N_BURN", 5000L),
+    n_iter = read_sensitivity_integer("SENS_N_ITER", 10000L),
+    thin = read_sensitivity_integer("SENS_THIN", 1L),
+    max_predictive_draws = read_sensitivity_integer("SENS_MAX_PREDICTIVE_DRAWS", 2000L),
+    seed = read_sensitivity_integer("SENS_SEED", 20260622L),
+    chunk_iter = read_sensitivity_integer("SENS_CHUNK_ITER", 1000L),
+    force = read_sensitivity_flag("SENS_FORCE", default = FALSE),
+    strict_convergence = read_sensitivity_flag("SENS_STRICT_CONVERGENCE", default = FALSE)) {
   if (!file.exists(analysis_objects_path)) {
     stop(
       "Prepared analysis objects not found: ", analysis_objects_path,
@@ -272,42 +462,143 @@ run_planned_sensitivity_analyses <- function(
       call. = FALSE
     )
   }
+  dir.create(mcmc_output_dir, recursive = TRUE, showWarnings = FALSE)
+  dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
+
+  sensitivity_draws_path <- file.path(mcmc_output_dir, "m2_wide_sd_prior_draws.rds")
+  partial_draws_path <- file.path(mcmc_output_dir, "m2_wide_sd_prior_draw_chunks_partial.rds")
+  settings_path <- file.path(tables_dir, "m2_prior_sensitivity_settings.csv")
+  runtime_path <- file.path(tables_dir, "m2_prior_sensitivity_runtime.csv")
+  convergence_path <- file.path(tables_dir, "m2_wide_sd_prior_diagnostics.csv")
+  convergence_status_path <- file.path(tables_dir, "m2_wide_sd_prior_convergence_status.csv")
+
+  settings_table <- data.frame(
+    setting = c(
+      "n_chains", "n_adapt", "n_burn", "n_iter", "thin",
+      "max_predictive_draws", "seed", "chunk_iter", "force",
+      "strict_convergence"
+    ),
+    value = c(
+      n_chains, n_adapt, n_burn, n_iter, thin,
+      max_predictive_draws, seed, chunk_iter, force, strict_convergence
+    ),
+    stringsAsFactors = FALSE
+  )
+  readr::write_csv(settings_table, settings_path)
+  timestamp_message("Saved sensitivity settings to ", settings_path, ".")
+
   analysis_objects <- readRDS(analysis_objects_path)
   validate_m2_analysis_objects(analysis_objects)
   production_draws <- readRDS(production_draws_path)
   parameters <- c("alpha", "beta", "sigma", "sd_state", "sd_zip", "u", "v")
-  sensitivity_fit <- fit_m2_sensitivity_model(
-    model_file = model_file,
-    data_list = analysis_objects$jags_train,
-    parameters = parameters,
-    n_chains = n_chains,
-    n_adapt = n_adapt,
-    n_burn = n_burn,
-    n_iter = n_iter,
-    thin = thin,
-    seed = seed
+
+  freshness_mtime <- max(
+    file.info(c(model_file, here::here("scripts", "11_sensitivity_analyses.R")))$mtime,
+    na.rm = TRUE
   )
+  output_mtime <- if (file.exists(sensitivity_draws_path)) {
+    file.info(sensitivity_draws_path)$mtime
+  } else {
+    as.POSIXct(NA)
+  }
+  output_current <- file.exists(sensitivity_draws_path) &&
+    !is.na(output_mtime) &&
+    output_mtime >= freshness_mtime
 
-  dir.create(mcmc_output_dir, recursive = TRUE, showWarnings = FALSE)
-  dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
-  sensitivity_draws_path <- file.path(mcmc_output_dir, "m2_wide_sd_prior_draws.rds")
-  saveRDS(sensitivity_fit$draws, sensitivity_draws_path)
+  fit_started_at <- Sys.time()
+  if (output_current && !force) {
+    timestamp_message(
+      "Skipping wider-prior M2 refit because current sensitivity draws exist at ",
+      sensitivity_draws_path, ". Set SENS_FORCE=true to refit."
+    )
+    sensitivity_draws <- readRDS(sensitivity_draws_path)
+    fit_status <- "skipped_existing_draws"
+    fit_seconds <- NA_real_
+  } else {
+    if (file.exists(sensitivity_draws_path) && !force) {
+      timestamp_message(
+        "Refitting wider-prior M2 because existing sensitivity draws are older ",
+        "than the model/script."
+      )
+    }
+    timestamp_message(
+      "Starting wider-prior M2 sensitivity fit. Settings: chains=", n_chains,
+      ", adapt=", n_adapt, ", burn=", n_burn, ", iter=", n_iter,
+      ", thin=", thin, ", chunk=", chunk_iter, "."
+    )
+    timestamp_message(
+      "Stall monitor: during long JAGS calls, heartbeat messages appear after ",
+      "each chunk. If no heartbeat appears for much longer than a previous ",
+      "similar chunk and Rscript CPU stays at 0, treat it as stalled."
+    )
+    sensitivity_fit <- fit_m2_sensitivity_model(
+      model_file = model_file,
+      data_list = analysis_objects$jags_train,
+      parameters = parameters,
+      n_chains = n_chains,
+      n_adapt = n_adapt,
+      n_burn = n_burn,
+      n_iter = n_iter,
+      thin = thin,
+      seed = seed,
+      chunk_iter = chunk_iter,
+      partial_draws_path = partial_draws_path
+    )
+    sensitivity_draws <- sensitivity_fit$draws
+    saveRDS(sensitivity_draws, sensitivity_draws_path)
+    fit_seconds <- as.numeric(difftime(Sys.time(), fit_started_at, units = "secs"))
+    fit_status <- "fitted"
+    timestamp_message(
+      "Saved wider-prior M2 sensitivity draws immediately to ",
+      sensitivity_draws_path, " after ", round(fit_seconds, 1), " seconds."
+    )
+  }
 
-  convergence <- summarise_convergence(sensitivity_fit$draws)
-  convergence_path <- file.path(tables_dir, "m2_wide_sd_prior_diagnostics.csv")
+  convergence_started_at <- Sys.time()
+  timestamp_message("Summarising wider-prior M2 convergence diagnostics.")
+  convergence <- summarise_convergence(sensitivity_draws)
+  beta_parameters <- indexed_parameter_names("beta", length(analysis_objects$predictor_names))
+  primary_parameters <- c("alpha", beta_parameters, "sigma", "sd_state", "sd_zip")
+  convergence$primary_parameter <- convergence$variable %in% primary_parameters
   readr::write_csv(convergence, convergence_path)
-  if (!all(convergence$converged)) {
-    failed_parameters <- convergence$variable[!convergence$converged]
+  convergence_seconds <- as.numeric(difftime(Sys.time(), convergence_started_at, units = "secs"))
+
+  failed_parameters <- convergence$variable[!convergence$converged]
+  failed_primary_parameters <- convergence$variable[
+    convergence$primary_parameter & !convergence$converged
+  ]
+  convergence_status <- data.frame(
+    n_parameters = nrow(convergence),
+    n_converged = sum(convergence$converged),
+    n_failed = length(failed_parameters),
+    n_primary_parameters = sum(convergence$primary_parameter),
+    n_primary_failed = length(failed_primary_parameters),
+    strict_convergence = strict_convergence,
+    stringsAsFactors = FALSE
+  )
+  readr::write_csv(convergence_status, convergence_status_path)
+  timestamp_message(
+    "Saved sensitivity diagnostics to ", convergence_path,
+    ". Converged ", convergence_status$n_converged, "/",
+    convergence_status$n_parameters, " parameters; primary failures: ",
+    convergence_status$n_primary_failed, "."
+  )
+  if (length(failed_parameters) > 0L && strict_convergence) {
     stop(
       "The wider-prior M2 fit did not meet convergence criteria. Investigate: ",
       paste(failed_parameters, collapse = ", "),
       ". Diagnostics saved to ", convergence_path,
       call. = FALSE
     )
+  } else if (length(failed_parameters) > 0L) {
+    timestamp_message(
+      "Continuing despite non-strict sensitivity convergence failures. ",
+      "Set SENS_STRICT_CONVERGENCE=true to make these failures stop the script."
+    )
   }
 
   production_matrix <- as.matrix(posterior::as_draws_matrix(production_draws))
-  sensitivity_matrix <- as.matrix(posterior::as_draws_matrix(sensitivity_fit$draws))
+  sensitivity_matrix <- as.matrix(posterior::as_draws_matrix(sensitivity_draws))
   production_summary <- summarise_sensitivity_parameters(
     production_matrix, analysis_objects, "Production M2"
   )
@@ -318,9 +609,10 @@ run_planned_sensitivity_analyses <- function(
   parameter_comparison <- compare_sensitivity_parameters(
     production_summary, sensitivity_summary
   )
+  timestamp_message("Evaluating held-out sensitivity performance.")
   performance <- evaluate_m2_prior_sensitivity(
     production_draws = production_draws,
-    sensitivity_draws = sensitivity_fit$draws,
+    sensitivity_draws = sensitivity_draws,
     analysis_objects = analysis_objects,
     max_predictive_draws = max_predictive_draws,
     seed = seed
@@ -338,6 +630,14 @@ run_planned_sensitivity_analyses <- function(
   readr::write_csv(parameter_comparison, parameter_comparison_path)
   readr::write_csv(performance$metrics, predictive_metrics_path)
   readr::write_csv(performance$predictions, predictive_predictions_path)
+
+  runtime_table <- data.frame(
+    stage = c("fit_or_load_draws", "convergence_summary"),
+    status = c(fit_status, "completed"),
+    elapsed_seconds = c(fit_seconds, convergence_seconds),
+    stringsAsFactors = FALSE
+  )
+  readr::write_csv(runtime_table, runtime_path)
 
   lot_size_status <- if ("log_acre_lot_z" %in% analysis_objects$predictor_names) {
     "Not run: log acre lot is already in the core M0-M2 design matrix."
@@ -365,8 +665,8 @@ run_planned_sensitivity_analyses <- function(
   decision_log_path <- file.path(tables_dir, "planned_sensitivity_analysis_log.csv")
   readr::write_csv(decision_log, decision_log_path)
 
-  message(
-    "Saved converged wider-prior M2 draws to ", sensitivity_draws_path,
+  timestamp_message(
+    "Saved wider-prior M2 draws to ", sensitivity_draws_path,
     " and prior-sensitivity comparisons to ", tables_dir, "."
   )
   invisible(list(

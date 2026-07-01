@@ -70,6 +70,24 @@ n_replications <- read_positive_integer("RECOVERY_REPLICATIONS", 20L)
 # production recovery fit is intentionally opt-in rather than an accidental
 # multi-hour interactive job. It remains mandatory before real-data claims.
 run_full_recovery <- read_flag("RECOVERY_RUN_FULL", default = FALSE)
+# By default, run the practical repeated reduced-design check when the
+# full-design check is not requested.  If RECOVERY_RUN_FULL=true, the script
+# now runs only that full-design check unless RECOVERY_RUN_REPEATED=true is
+# also set.  This avoids accidentally launching 21 production-setting JAGS
+# fits from a command that was intended to refresh the full-design evidence.
+run_repeated_recovery <- read_flag(
+  "RECOVERY_RUN_REPEATED",
+  default = !run_full_recovery
+)
+force_full_recovery <- read_flag("RECOVERY_FORCE_FULL", default = FALSE)
+force_repeated_recovery <- read_flag("RECOVERY_FORCE_REPEATED", default = FALSE)
+resume_repeated_recovery <- read_flag("RECOVERY_RESUME_REPEATED", default = TRUE)
+if (!run_full_recovery && !run_repeated_recovery) {
+  stop(
+    "Nothing to run: set RECOVERY_RUN_FULL=true or RECOVERY_RUN_REPEATED=true.",
+    call. = FALSE
+  )
+}
 
 validate_jags_data <- function(jags_data) {
   required_fields <- c("N", "P", "S", "Z", "y", "X", "state", "zip")
@@ -114,6 +132,42 @@ validate_jags_data <- function(jags_data) {
   invisible(TRUE)
 }
 
+zip_state_lookup <- function(jags_data) {
+  validate_jags_data(jags_data)
+  vapply(seq_len(jags_data$Z), function(zip_id) {
+    states <- unique(as.integer(jags_data$state[jags_data$zip == zip_id]))
+    states <- states[!is.na(states)]
+    if (length(states) != 1L) {
+      stop("Each ZIP must belong to exactly one state.", call. = FALSE)
+    }
+    states
+  }, integer(1L))
+}
+
+augment_zip_centering_data <- function(jags_data) {
+  zip_state <- zip_state_lookup(jags_data)
+  n_zips_by_state <- tabulate(zip_state, nbins = jags_data$S)
+  if (any(n_zips_by_state < 1L)) {
+    stop("Every state must have at least one ZIP for M2 ZIP centering.", call. = FALSE)
+  }
+
+  k_max <- max(n_zips_by_state)
+  zip_in_state <- matrix(1L, nrow = jags_data$S, ncol = k_max)
+  zip_in_state_weight <- matrix(0, nrow = jags_data$S, ncol = k_max)
+  for (state_id in seq_len(jags_data$S)) {
+    state_zips <- which(zip_state == state_id)
+    zip_in_state[state_id, seq_along(state_zips)] <- state_zips
+    zip_in_state_weight[state_id, seq_along(state_zips)] <- 1
+  }
+
+  jags_data$K <- as.integer(k_max)
+  jags_data$zip_state <- as.integer(zip_state)
+  jags_data$n_zips_by_state <- as.integer(n_zips_by_state)
+  jags_data$zip_in_state <- zip_in_state
+  jags_data$zip_in_state_weight <- zip_in_state_weight
+  jags_data
+}
+
 make_truth <- function(P) {
   beta <- c(0.45, 0.08, 0.06, 0.16, rep(0.05, P - 4L))
   if (length(beta) != P) {
@@ -140,6 +194,7 @@ truth_vector <- function(truth) {
 
 simulate_m2_data <- function(jags_data, truth) {
   validate_jags_data(jags_data)
+  jags_data <- augment_zip_centering_data(jags_data)
   scalar_truth <- truth_vector(truth)
   if (length(truth$beta) != jags_data$P ||
       any(!is.finite(c(scalar_truth, truth$sd_state, truth$sd_zip))) ||
@@ -147,8 +202,13 @@ simulate_m2_data <- function(jags_data, truth) {
     stop("Simulation truth is incompatible with the M2 design.", call. = FALSE)
   }
 
-  u_true <- stats::rnorm(jags_data$S, 0, truth$sd_state)
-  v_true <- stats::rnorm(jags_data$Z, 0, truth$sd_zip)
+  u_raw_true <- stats::rnorm(jags_data$S, 0, truth$sd_state)
+  u_true <- u_raw_true - mean(u_raw_true)
+  v_raw_true <- stats::rnorm(jags_data$Z, 0, truth$sd_zip)
+  v_state_mean <- vapply(seq_len(jags_data$S), function(state_id) {
+    mean(v_raw_true[jags_data$zip_state == state_id])
+  }, numeric(1L))
+  v_true <- v_raw_true - v_state_mean[jags_data$zip_state]
   mu <- as.vector(
     truth$alpha +
       jags_data$X %*% truth$beta +
@@ -185,6 +245,7 @@ make_m2_inits <- function(data_list, n_chains, seed) {
 
 fit_m2_recovery <- function(data_list, settings, seed) {
   validate_jags_data(data_list)
+  data_list <- augment_zip_centering_data(data_list)
   if (!file.exists(model_path)) {
     stop("M2 model file not found: ", model_path, call. = FALSE)
   }
@@ -333,6 +394,109 @@ plot_random_effect_recovery <- function(effect_data, output_path) {
   grDevices::dev.off()
 }
 
+full_recovery_paths <- function(tables_dir, figures_dir) {
+  c(
+    file.path(tables_dir, "simulation_recovery_full_scalar_parameters.csv"),
+    file.path(tables_dir, "simulation_recovery_full_diagnostics.csv"),
+    file.path(tables_dir, "simulation_recovery_full_random_effects.csv"),
+    file.path(tables_dir, "simulation_recovery_full_random_effect_metrics.csv"),
+    file.path(figures_dir, "simulation_recovery_full_state_effects.png"),
+    file.path(figures_dir, "simulation_recovery_full_zip_effects.png")
+  )
+}
+
+all_paths_exist <- function(paths) {
+  all(file.exists(paths))
+}
+
+all_paths_current_for_model <- function(paths, model_path) {
+  if (!all_paths_exist(paths) || !file.exists(model_path)) {
+    return(FALSE)
+  }
+  model_mtime <- file.info(model_path)$mtime
+  all(file.info(paths)$mtime >= model_mtime)
+}
+
+read_convergence_status <- function(path) {
+  if (!file.exists(path)) {
+    return(NA)
+  }
+  diagnostics <- utils::read.csv(path, stringsAsFactors = FALSE)
+  if (!"converged" %in% names(diagnostics) || nrow(diagnostics) == 0L) {
+    return(NA)
+  }
+  all(as.logical(diagnostics$converged))
+}
+
+repeated_status_path <- function(tables_dir) {
+  file.path(tables_dir, "simulation_recovery_repeated_fit_status.csv")
+}
+
+repeated_metrics_path <- function(tables_dir) {
+  file.path(tables_dir, "simulation_recovery_repeated_parameter_metrics.csv")
+}
+
+repeated_scalar_path <- function(tables_dir, replication) {
+  file.path(
+    tables_dir,
+    sprintf("simulation_recovery_repeated_scalar_replication_%02d.csv", replication)
+  )
+}
+
+normalise_repeated_status <- function(status) {
+  if (is.null(status) || nrow(status) == 0L) {
+    return(status)
+  }
+  status$replication <- as.integer(status$replication)
+  status$completed <- as.logical(status$completed)
+  status$converged <- as.logical(status$converged)
+  status
+}
+
+read_repeated_status <- function(path) {
+  if (!file.exists(path)) {
+    return(data.frame())
+  }
+  normalise_repeated_status(utils::read.csv(path, stringsAsFactors = FALSE))
+}
+
+write_repeated_status <- function(status_list, path) {
+  available_status <- Filter(Negate(is.null), status_list)
+  if (length(available_status) == 0L) {
+    return(invisible(NULL))
+  }
+  status <- do.call(rbind, available_status)
+  status <- status[order(status$replication), , drop = FALSE]
+  utils::write.csv(status, path, row.names = FALSE)
+  invisible(status)
+}
+
+existing_repeated_success <- function(existing_status, replication, scalar_path,
+                                      model_path = NULL) {
+  if (nrow(existing_status) == 0L || !file.exists(scalar_path)) {
+    return(FALSE)
+  }
+  if (!is.null(model_path) && file.exists(model_path) &&
+      file.info(scalar_path)$mtime < file.info(model_path)$mtime) {
+    return(FALSE)
+  }
+  row <- existing_status[existing_status$replication == replication, , drop = FALSE]
+  nrow(row) == 1L && isTRUE(row$completed) && isTRUE(row$converged)
+}
+
+empty_repeated_metrics <- function(truth) {
+  data.frame(
+    parameter = names(truth_vector(truth)),
+    label = names(truth_vector(truth)),
+    true_value = as.numeric(truth_vector(truth)),
+    n_successful_converged = 0L,
+    empirical_coverage_95 = NA_real_,
+    posterior_mean_bias = NA_real_,
+    posterior_mean_rmse = NA_real_,
+    stringsAsFactors = FALSE
+  )
+}
+
 # Build a fixed, balanced reduced design from the real M2 design.  Only the
 # outcome is resimulated across replications, making the coverage experiment
 # directly comparable from one synthetic data set to the next.
@@ -465,6 +629,10 @@ settings_table <- data.frame(
   n_zips_per_state = c(NA_integer_, 5L),
   n_per_zip = c(NA_integer_, 12L),
   run_full_recovery = run_full_recovery,
+  run_repeated_recovery = run_repeated_recovery,
+  force_full_recovery = force_full_recovery,
+  force_repeated_recovery = force_repeated_recovery,
+  resume_repeated_recovery = resume_repeated_recovery,
   stringsAsFactors = FALSE
 )
 utils::write.csv(
@@ -474,135 +642,205 @@ utils::write.csv(
 )
 
 full_result <- NULL
+full_result_converged <- NA
 if (run_full_recovery) {
-  full_result <- run_one_recovery(
-    jags_data = full_data,
-    truth = truth,
-    settings = mcmc_settings,
-    seed = recovery_seed,
-    predictor_names = analysis_objects$predictor_names,
-    state_labels = analysis_objects$state_levels,
-    zip_labels = analysis_objects$zip_levels
-  )
-  full_result$scalar$converged <- full_result$converged
-  utils::write.csv(
-    full_result$scalar,
-    file.path(tables_dir, "simulation_recovery_full_scalar_parameters.csv"),
-    row.names = FALSE
-  )
-  utils::write.csv(
-    full_result$diagnostics,
-    file.path(tables_dir, "simulation_recovery_full_diagnostics.csv"),
-    row.names = FALSE
-  )
-  utils::write.csv(
-    full_result$random_effects$effects,
-    file.path(tables_dir, "simulation_recovery_full_random_effects.csv"),
-    row.names = FALSE
-  )
-  utils::write.csv(
-    full_result$random_effects$metrics,
-    file.path(tables_dir, "simulation_recovery_full_random_effect_metrics.csv"),
-    row.names = FALSE
-  )
-  plot_random_effect_recovery(
-    subset(full_result$random_effects$effects, effect == "state"),
-    file.path(figures_dir, "simulation_recovery_full_state_effects.png")
-  )
-  plot_random_effect_recovery(
-    subset(full_result$random_effects$effects, effect == "zip"),
-    file.path(figures_dir, "simulation_recovery_full_zip_effects.png")
-  )
-}
-
-reduced_design <- make_reduced_design(full_data)
-reduced_truth <- make_truth(reduced_design$data$P)
-replication_results <- vector("list", n_replications)
-replication_status <- vector("list", n_replications)
-for (replication in seq_len(n_replications)) {
-  result <- tryCatch(
-    run_one_recovery(
-      jags_data = reduced_design$data,
-      truth = reduced_truth,
-      settings = mcmc_settings,
-      seed = recovery_seed + 10000L * replication,
-      predictor_names = analysis_objects$predictor_names,
-      state_labels = analysis_objects$state_levels[reduced_design$original_state_ids],
-      zip_labels = analysis_objects$zip_levels[reduced_design$original_zip_ids]
-    ),
-    error = function(error) error
-  )
-
-  if (inherits(result, "error")) {
-    replication_status[[replication]] <- data.frame(
-      replication = replication,
-      completed = FALSE,
-      converged = FALSE,
-      elapsed_seconds = NA_real_,
-      max_rhat = NA_real_,
-      min_bulk_ess = NA_real_,
-      min_tail_ess = NA_real_,
-      error = conditionMessage(result),
-      stringsAsFactors = FALSE
+  existing_full_paths <- full_recovery_paths(tables_dir, figures_dir)
+  existing_full_complete <- all_paths_current_for_model(existing_full_paths, model_path)
+  if (existing_full_complete && !force_full_recovery) {
+    message(
+      "Skipping full-design recovery because all expected outputs already exist. ",
+      "Set RECOVERY_FORCE_FULL=true to refit it."
+    )
+    full_result_converged <- read_convergence_status(
+      file.path(tables_dir, "simulation_recovery_full_diagnostics.csv")
     )
   } else {
-    replication_results[[replication]] <- result
-    replication_status[[replication]] <- data.frame(
-      replication = replication,
-      completed = TRUE,
-      converged = result$converged,
-      elapsed_seconds = result$elapsed_seconds,
-      max_rhat = result$max_rhat,
-      min_bulk_ess = result$min_bulk_ess,
-      min_tail_ess = result$min_tail_ess,
-      error = NA_character_,
-      stringsAsFactors = FALSE
+    full_result <- run_one_recovery(
+      jags_data = full_data,
+      truth = truth,
+      settings = mcmc_settings,
+      seed = recovery_seed,
+      predictor_names = analysis_objects$predictor_names,
+      state_labels = analysis_objects$state_levels,
+      zip_labels = analysis_objects$zip_levels
+    )
+    full_result$scalar$converged <- full_result$converged
+    full_result_converged <- full_result$converged
+    utils::write.csv(
+      full_result$scalar,
+      file.path(tables_dir, "simulation_recovery_full_scalar_parameters.csv"),
+      row.names = FALSE
+    )
+    utils::write.csv(
+      full_result$diagnostics,
+      file.path(tables_dir, "simulation_recovery_full_diagnostics.csv"),
+      row.names = FALSE
+    )
+    utils::write.csv(
+      full_result$random_effects$effects,
+      file.path(tables_dir, "simulation_recovery_full_random_effects.csv"),
+      row.names = FALSE
+    )
+    utils::write.csv(
+      full_result$random_effects$metrics,
+      file.path(tables_dir, "simulation_recovery_full_random_effect_metrics.csv"),
+      row.names = FALSE
+    )
+    plot_random_effect_recovery(
+      subset(full_result$random_effects$effects, effect == "state"),
+      file.path(figures_dir, "simulation_recovery_full_state_effects.png")
+    )
+    plot_random_effect_recovery(
+      subset(full_result$random_effects$effects, effect == "zip"),
+      file.path(figures_dir, "simulation_recovery_full_zip_effects.png")
     )
   }
 }
-replication_status <- do.call(rbind, replication_status)
-utils::write.csv(
-  replication_status,
-  file.path(tables_dir, "simulation_recovery_repeated_fit_status.csv"),
-  row.names = FALSE
-)
 
-successful_replications <- which(replication_status$completed & replication_status$converged)
-if (length(successful_replications) > 0L) {
-  repeated_scalar <- do.call(rbind, lapply(successful_replications, function(replication) {
-    values <- replication_results[[replication]]$scalar
-    values$replication <- replication
-    values
-  }))
-  repeated_metrics <- do.call(rbind, lapply(split(repeated_scalar, repeated_scalar$parameter), function(values) {
-    data.frame(
-      parameter = values$parameter[1L],
-      label = values$label[1L],
-      true_value = values$true_value[1L],
-      n_successful_converged = nrow(values),
-      empirical_coverage_95 = mean(values$covers_truth),
-      posterior_mean_bias = mean(values$bias),
-      posterior_mean_rmse = sqrt(mean(values$bias^2)),
-      stringsAsFactors = FALSE
+reduced_truth <- make_truth(full_data$P)
+replication_status <- data.frame()
+successful_replications <- integer(0L)
+if (run_repeated_recovery) {
+  reduced_design <- make_reduced_design(full_data)
+  reduced_truth <- make_truth(reduced_design$data$P)
+  status_path <- repeated_status_path(tables_dir)
+  existing_status <- if (resume_repeated_recovery && !force_repeated_recovery) {
+    read_repeated_status(status_path)
+  } else {
+    data.frame()
+  }
+  replication_status_list <- vector("list", n_replications)
+  if (nrow(existing_status) > 0L && !force_repeated_recovery) {
+    for (replication in seq_len(n_replications)) {
+      scalar_path <- repeated_scalar_path(tables_dir, replication)
+      if (existing_repeated_success(existing_status, replication, scalar_path, model_path)) {
+        replication_status_list[[replication]] <- existing_status[
+          existing_status$replication == replication, ,
+          drop = FALSE
+        ]
+      }
+    }
+  }
+
+  for (replication in seq_len(n_replications)) {
+    scalar_path <- repeated_scalar_path(tables_dir, replication)
+    if (!force_repeated_recovery &&
+        existing_repeated_success(existing_status, replication, scalar_path, model_path)) {
+      replication_status_list[[replication]] <- existing_status[
+        existing_status$replication == replication, ,
+        drop = FALSE
+      ]
+      message(
+        "Skipping reduced-design recovery replication ", replication, "/",
+        n_replications, " because a converged checkpoint exists."
+      )
+      write_repeated_status(replication_status_list, status_path)
+      next
+    }
+
+    message(
+      "Running reduced-design recovery replication ", replication, "/",
+      n_replications, "."
     )
-  }))
-} else {
-  repeated_metrics <- data.frame(
-    parameter = names(truth_vector(reduced_truth)),
-    label = names(truth_vector(reduced_truth)),
-    true_value = as.numeric(truth_vector(reduced_truth)),
-    n_successful_converged = 0L,
-    empirical_coverage_95 = NA_real_,
-    posterior_mean_bias = NA_real_,
-    posterior_mean_rmse = NA_real_,
-    stringsAsFactors = FALSE
+    result <- tryCatch(
+      run_one_recovery(
+        jags_data = reduced_design$data,
+        truth = reduced_truth,
+        settings = mcmc_settings,
+        seed = recovery_seed + 10000L * replication,
+        predictor_names = analysis_objects$predictor_names,
+        state_labels = analysis_objects$state_levels[reduced_design$original_state_ids],
+        zip_labels = analysis_objects$zip_levels[reduced_design$original_zip_ids]
+      ),
+      error = function(error) error
+    )
+
+    if (inherits(result, "error")) {
+      replication_status_list[[replication]] <- data.frame(
+        replication = replication,
+        completed = FALSE,
+        converged = FALSE,
+        elapsed_seconds = NA_real_,
+        max_rhat = NA_real_,
+        min_bulk_ess = NA_real_,
+        min_tail_ess = NA_real_,
+        error = conditionMessage(result),
+        stringsAsFactors = FALSE
+      )
+    } else {
+      scalar <- result$scalar
+      scalar$replication <- replication
+      utils::write.csv(scalar, scalar_path, row.names = FALSE)
+      replication_status_list[[replication]] <- data.frame(
+        replication = replication,
+        completed = TRUE,
+        converged = result$converged,
+        elapsed_seconds = result$elapsed_seconds,
+        max_rhat = result$max_rhat,
+        min_bulk_ess = result$min_bulk_ess,
+        min_tail_ess = result$min_tail_ess,
+        error = NA_character_,
+        stringsAsFactors = FALSE
+      )
+    }
+    write_repeated_status(replication_status_list, status_path)
+    status <- replication_status_list[[replication]]
+    message(
+      "Finished reduced-design recovery replication ", replication, "/",
+      n_replications, ": completed=", status$completed,
+      ", converged=", status$converged,
+      ", elapsed_seconds=", round(status$elapsed_seconds, 1), "."
+    )
+  }
+  replication_status <- write_repeated_status(replication_status_list, status_path)
+  replication_status <- normalise_repeated_status(replication_status)
+
+  successful_replications <- replication_status$replication[
+    replication_status$completed & replication_status$converged
+  ]
+  successful_scalar_paths <- repeated_scalar_path(tables_dir, successful_replications)
+  successful_replications <- successful_replications[file.exists(successful_scalar_paths)]
+  if (length(successful_replications) > 0L) {
+    repeated_scalar <- do.call(rbind, lapply(successful_replications, function(replication) {
+      utils::read.csv(
+        repeated_scalar_path(tables_dir, replication),
+        stringsAsFactors = FALSE
+      )
+    }))
+    repeated_metrics <- do.call(rbind, lapply(split(repeated_scalar, repeated_scalar$parameter), function(values) {
+      data.frame(
+        parameter = values$parameter[1L],
+        label = values$label[1L],
+        true_value = values$true_value[1L],
+        n_successful_converged = nrow(values),
+        empirical_coverage_95 = mean(values$covers_truth),
+        posterior_mean_bias = mean(values$bias),
+        posterior_mean_rmse = sqrt(mean(values$bias^2)),
+        stringsAsFactors = FALSE
+      )
+    }))
+  } else {
+    repeated_metrics <- empty_repeated_metrics(reduced_truth)
+  }
+  utils::write.csv(
+    repeated_metrics,
+    repeated_metrics_path(tables_dir),
+    row.names = FALSE
   )
+} else {
+  message(
+    "Skipping repeated reduced-design recovery because ",
+    "RECOVERY_RUN_REPEATED=false."
+  )
+  if (file.exists(repeated_status_path(tables_dir))) {
+    replication_status <- normalise_repeated_status(
+      read_repeated_status(repeated_status_path(tables_dir))
+    )
+    successful_replications <- replication_status$replication[
+      replication_status$completed & replication_status$converged
+    ]
+  }
 }
-utils::write.csv(
-  repeated_metrics,
-  file.path(tables_dir, "simulation_recovery_repeated_parameter_metrics.csv"),
-  row.names = FALSE
-)
 
 if (!run_full_recovery) {
   warning(
@@ -611,14 +849,14 @@ if (!run_full_recovery) {
     call. = FALSE
   )
 }
-if (!is.null(full_result) && !full_result$converged) {
+if (!is.na(full_result_converged) && !full_result_converged) {
   warning(
     "The full-design simulation recovery did not meet the pre-specified R-hat/ESS criteria. ",
     "Inspect simulation_recovery_full_diagnostics.csv before interpreting recovery estimates.",
     call. = FALSE
   )
 }
-if (length(successful_replications) < n_replications) {
+if (run_repeated_recovery && length(successful_replications) < n_replications) {
   warning(
     length(successful_replications), " of ", n_replications,
     " reduced-design replications completed and met the pre-specified convergence criteria. ",
@@ -629,7 +867,14 @@ if (length(successful_replications) < n_replications) {
 
 message(
   "Simulation recovery complete. ",
-  if (run_full_recovery) "Full-design recovery was saved. " else "Full-design recovery was not run; set RECOVERY_RUN_FULL=true for final validation. ",
-  length(successful_replications), "/", n_replications,
-  " reduced-design replications completed and converged. Results are under output/tables and output/figures."
+  if (run_full_recovery) "Full-design recovery was checked. " else "Full-design recovery was not run; set RECOVERY_RUN_FULL=true for final validation. ",
+  if (run_repeated_recovery) {
+    paste0(
+      length(successful_replications), "/", n_replications,
+      " reduced-design replications completed and converged. "
+    )
+  } else {
+    "Repeated reduced-design recovery was skipped. "
+  },
+  "Results are under output/tables and output/figures."
 )

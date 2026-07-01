@@ -1,13 +1,13 @@
-variable,type,units,missing_n,missing_prop,distinct_n,min,median,max
-brokered_by,numeric,broker identifier,4533,0.002036038739084308,110143,0,52884,110142
-status,character,listing-status category,0,0,3,NA,NA,NA
-price,numeric,USD,1541,6.921543562605159e-4,102137,0,325000,2147483600
-bed,integer,bedrooms,481317,0.21618796774318152,99,1,3,473
-bath,integer,bathrooms,511771,0.22986666259428976,86,1,2,830
-acre_lot,numeric,acres,325589,0.14624130090882875,16057,0,0.26,100000
-street,numeric,street address,10866,0.004880564072113411,2001358,0,1012765.5,2001357
-city,character,city name,1407,6.319670209335146e-4,20098,NA,NA,NA
-state,character,state name,8,3.5932737508657543e-6,55,NA,NA,NA
-zip_code,integer,ZIP-code label,299,1.3429860643860756e-4,30334,0,48382,99999
-house_size,numeric,square feet,568484,0.25533982937339594,12061,4,1760,1040400400
-prev_sold_date,IDate/Date,calendar date,734297,0.3298162669299339,14954,NA,NA,NA
+"variable","type","units","missing_n","missing_prop","distinct_n","min","median","max"
+"brokered_by","numeric","broker identifier",4533,0.00203603873908431,110143,0,52884,110142
+"status","character","listing-status category",0,0,3,,,
+"price","numeric","USD",1541,0.000692154356260516,102137,0,325000,2147483600
+"bed","integer","bedrooms",481317,0.216187967743182,99,1,3,473
+"bath","integer","bathrooms",511771,0.22986666259429,86,1,2,830
+"acre_lot","numeric","acres",325589,0.146241300908829,16057,0,0.26,100000
+"street","numeric","street address",10866,0.00488056407211341,2001358,0,1012765.5,2001357
+"city","character","city name",1407,0.000631967020933515,20098,,,
+"state","character","state name",8,0.00000359327375086575,55,,,
+"zip_code","integer","ZIP-code label",299,0.000134298606438608,30334,0,48382,99999
+"house_size","numeric","square feet",568484,0.255339829373396,12061,4,1760,1040400400
+"prev_sold_date","IDate/Date","calendar date",734297,0.329816266929934,14954,,,

@@ -1,6 +1,6 @@
-metric,value
-rows,2226382
-columns,12
-unique_states,55
-unique_cities,20098
-unique_zip_codes,30334
+"metric","value"
+"rows",2226382
+"columns",12
+"unique_states",55
+"unique_cities",20098
+"unique_zip_codes",30334

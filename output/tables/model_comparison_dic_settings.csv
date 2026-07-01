@@ -1,0 +1,8 @@
+setting,value
+workflow,lightweight_dic_only_refit
+n_chains,4
+n_adapt,2000
+n_burn,5000
+n_dic_iter,5000
+seed,20260623
+analysis_objects_path,C:/Users/andre/Desktop/Final-FSLII/data/processed/analysis_objects.rds

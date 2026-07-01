@@ -1,6 +1,6 @@
-variable,total_n,missing_n,zero_n,negative_n,non_positive_n
-price,2226382,1541,280,0,280
-bed,2226382,481317,0,0,0
-bath,2226382,511771,0,0,0
-house_size,2226382,568484,0,0,0
-acre_lot,2226382,325589,2226,0,2226
+"variable","total_n","missing_n","zero_n","negative_n","non_positive_n"
+"price",2226382,1541,280,0,280
+"bed",2226382,481317,0,0,0
+"bath",2226382,511771,0,0,0
+"house_size",2226382,568484,0,0,0
+"acre_lot",2226382,325589,2226,0,2226

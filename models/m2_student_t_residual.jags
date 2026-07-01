@@ -10,13 +10,23 @@ model {
   }
 
   for (s in 1:S) {
-    u[s] ~ dnorm(0, tau_state)
+    u_raw[s] ~ dnorm(0, tau_state)
+    u[s] <- u_raw[s] - u_mean
   }
+  u_mean <- sum(u_raw[]) / S
   sd_state ~ dnorm(0, 11.111111) T(0,)
   tau_state <- pow(sd_state, -2)
 
   for (z in 1:Z) {
-    v[z] ~ dnorm(0, tau_zip)
+    v_raw[z] ~ dnorm(0, tau_zip)
+    v[z] <- v_raw[z] - v_state_mean[zip_state[z]]
+  }
+  for (s in 1:S) {
+    for (k in 1:K) {
+      v_state_member[s,k] <- v_raw[zip_in_state[s,k]] * zip_in_state_weight[s,k]
+    }
+    v_state_sum[s] <- sum(v_state_member[s,])
+    v_state_mean[s] <- v_state_sum[s] / n_zips_by_state[s]
   }
   sd_zip ~ dnorm(0, 11.111111) T(0,)
   tau_zip <- pow(sd_zip, -2)

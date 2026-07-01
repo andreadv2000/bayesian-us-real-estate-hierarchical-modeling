@@ -1,6 +1,6 @@
 # Bayesian Hierarchical Real-Estate Price Modeling Across US States and ZIP Codes
 
-This repository contains a reproducible final-project scaffold for a fully Bayesian analysis of US residential listing prices. The planned analysis estimates partial-pooling effects at both the state and ZIP-code levels using MCMC in R/JAGS.
+This repository contains a reproducible final-project scaffold for a fully Bayesian analysis of US residential listing prices. The implemented raw-data audit is documented in `report/report.Rmd`; the planned analysis estimates partial-pooling effects at both the state and ZIP-code levels using MCMC in R/JAGS.
 
 ## Data source
 
@@ -35,8 +35,8 @@ The response is log listing price. Planned covariates are log living area, log l
 - models/: JAGS model specifications.
 - scripts/: numbered R analysis scripts.
 - output/: generated figures, tables, MCMC draws, and logs.
-- report/: Quarto/R Markdown report source and bibliography.
+- report/: Quarto/R Markdown report source and bibliography. Render `report/report.Rmd` for the implemented audit, plots, modelling rationale, and code.
 
 ## Current scope
 
-The raw dataset has been downloaded and catalogued. Data import, model code, and analysis execution are intentionally deferred to later implementation phases.
+The raw dataset has been downloaded, imported, catalogued, and audited. The audit writes reproducible tables and plots under `output/`. Stratified sampling, JAGS model code, model fitting, and posterior analysis are intentionally deferred to later implementation phases.

@@ -1,24 +1,25 @@
-options(repos = c(CRAN = "https://cloud.r-project.org"))
-
-required_packages <- c(
-  "data.table", "dplyr", "tidyr", "stringr", "forcats",
-  "ggplot2", "readr", "janitor", "here", "fs",
-  "rjags", "coda", "posterior", "bayesplot",
-  "mcmcse", "broom", "knitr", "kableExtra",
-  "arrow", "sessioninfo", "purrr", "tibble"
+# Settings used by the scripts that are implemented so far.
+options(
+  repos = c(CRAN = "https://cloud.r-project.org"),
+  stringsAsFactors = FALSE,
+  scipen = 999
 )
 
-missing <- required_packages[
-  !required_packages %in% rownames(installed.packages())
-]
-if (length(missing) > 0) {
-  install.packages(missing)
+# `fread()` is retained because the raw CSV is large.  All other work in the
+# completed audit uses base R functions.
+required_packages <- "data.table"
+missing_packages <- required_packages[!vapply(
+  required_packages,
+  requireNamespace,
+  quietly = TRUE,
+  FUN.VALUE = logical(1)
+)]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Install the required package before running the audit: ",
+    paste(missing_packages, collapse = ", ")
+  )
 }
 
-invisible(lapply(required_packages, library, character.only = TRUE))
-
-jags_runtime_version <- rjags::jags.version()
-message("JAGS version: ", as.character(jags_runtime_version))
-
 set.seed(20260621)
-options(stringsAsFactors = FALSE, scipen = 999)
