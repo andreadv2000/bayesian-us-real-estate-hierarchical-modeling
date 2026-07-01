@@ -66,6 +66,40 @@ mcmc_settings <- list(
   thin = read_positive_integer("RECOVERY_THIN", 1L)
 )
 n_replications <- read_positive_integer("RECOVERY_REPLICATIONS", 20L)
+reduced_design_settings <- list(
+  n_states = read_positive_integer("RECOVERY_REDUCED_N_STATES", 5L),
+  n_zips_per_state = read_positive_integer("RECOVERY_REDUCED_N_ZIPS_PER_STATE", 5L),
+  n_per_zip = read_positive_integer("RECOVERY_REDUCED_N_PER_ZIP", 12L)
+)
+default_reduced_design_settings <- list(
+  n_states = 5L,
+  n_zips_per_state = 5L,
+  n_per_zip = 12L
+)
+make_safe_label <- function(value) {
+  value <- gsub("[^A-Za-z0-9_-]+", "_", value)
+  value <- gsub("_+", "_", value)
+  gsub("^_|_$", "", value)
+}
+custom_reduced_design <- !identical(
+  unlist(reduced_design_settings, use.names = TRUE),
+  unlist(default_reduced_design_settings, use.names = TRUE)
+)
+reduced_design_label <- Sys.getenv("RECOVERY_REDUCED_LABEL", unset = "")
+if (!nzchar(reduced_design_label) && custom_reduced_design) {
+  reduced_design_label <- sprintf(
+    "%dstates_%dzips_%dperzip",
+    reduced_design_settings$n_states,
+    reduced_design_settings$n_zips_per_state,
+    reduced_design_settings$n_per_zip
+  )
+}
+reduced_design_label <- make_safe_label(reduced_design_label)
+reduced_output_suffix <- if (nzchar(reduced_design_label)) {
+  paste0("_", reduced_design_label)
+} else {
+  ""
+}
 # The full frozen design has 14,400 observations and 600 ZIP effects, so its
 # production recovery fit is intentionally opt-in rather than an accidental
 # multi-hour interactive job. It remains mandatory before real-data claims.
@@ -428,18 +462,22 @@ read_convergence_status <- function(path) {
   all(as.logical(diagnostics$converged))
 }
 
-repeated_status_path <- function(tables_dir) {
-  file.path(tables_dir, "simulation_recovery_repeated_fit_status.csv")
+repeated_status_path <- function(tables_dir, suffix = "") {
+  file.path(tables_dir, paste0("simulation_recovery_repeated_fit_status", suffix, ".csv"))
 }
 
-repeated_metrics_path <- function(tables_dir) {
-  file.path(tables_dir, "simulation_recovery_repeated_parameter_metrics.csv")
+repeated_metrics_path <- function(tables_dir, suffix = "") {
+  file.path(tables_dir, paste0("simulation_recovery_repeated_parameter_metrics", suffix, ".csv"))
 }
 
-repeated_scalar_path <- function(tables_dir, replication) {
+repeated_scalar_path <- function(tables_dir, replication, suffix = "") {
   file.path(
     tables_dir,
-    sprintf("simulation_recovery_repeated_scalar_replication_%02d.csv", replication)
+    sprintf(
+      "simulation_recovery_repeated_scalar_replication_%02d%s.csv",
+      replication,
+      suffix
+    )
   )
 }
 
@@ -625,9 +663,10 @@ settings_table <- data.frame(
   n_iter = mcmc_settings$n_iter,
   thin = mcmc_settings$thin,
   n_replications = c(1L, n_replications),
-  n_states = c(full_data$S, 5L),
-  n_zips_per_state = c(NA_integer_, 5L),
-  n_per_zip = c(NA_integer_, 12L),
+  n_states = c(full_data$S, reduced_design_settings$n_states),
+  n_zips_per_state = c(NA_integer_, reduced_design_settings$n_zips_per_state),
+  n_per_zip = c(NA_integer_, reduced_design_settings$n_per_zip),
+  reduced_design_label = c(NA_character_, reduced_design_label),
   run_full_recovery = run_full_recovery,
   run_repeated_recovery = run_repeated_recovery,
   force_full_recovery = force_full_recovery,
@@ -701,9 +740,15 @@ reduced_truth <- make_truth(full_data$P)
 replication_status <- data.frame()
 successful_replications <- integer(0L)
 if (run_repeated_recovery) {
-  reduced_design <- make_reduced_design(full_data)
+  reduced_design <- make_reduced_design(
+    full_data,
+    n_states = reduced_design_settings$n_states,
+    n_zips_per_state = reduced_design_settings$n_zips_per_state,
+    n_per_zip = reduced_design_settings$n_per_zip,
+    seed = recovery_seed
+  )
   reduced_truth <- make_truth(reduced_design$data$P)
-  status_path <- repeated_status_path(tables_dir)
+  status_path <- repeated_status_path(tables_dir, reduced_output_suffix)
   existing_status <- if (resume_repeated_recovery && !force_repeated_recovery) {
     read_repeated_status(status_path)
   } else {
@@ -712,7 +757,7 @@ if (run_repeated_recovery) {
   replication_status_list <- vector("list", n_replications)
   if (nrow(existing_status) > 0L && !force_repeated_recovery) {
     for (replication in seq_len(n_replications)) {
-      scalar_path <- repeated_scalar_path(tables_dir, replication)
+      scalar_path <- repeated_scalar_path(tables_dir, replication, reduced_output_suffix)
       if (existing_repeated_success(existing_status, replication, scalar_path, model_path)) {
         replication_status_list[[replication]] <- existing_status[
           existing_status$replication == replication, ,
@@ -723,7 +768,7 @@ if (run_repeated_recovery) {
   }
 
   for (replication in seq_len(n_replications)) {
-    scalar_path <- repeated_scalar_path(tables_dir, replication)
+    scalar_path <- repeated_scalar_path(tables_dir, replication, reduced_output_suffix)
     if (!force_repeated_recovery &&
         existing_repeated_success(existing_status, replication, scalar_path, model_path)) {
       replication_status_list[[replication]] <- existing_status[
@@ -732,7 +777,9 @@ if (run_repeated_recovery) {
       ]
       message(
         "Skipping reduced-design recovery replication ", replication, "/",
-        n_replications, " because a converged checkpoint exists."
+        n_replications, " because a converged checkpoint exists",
+        if (nzchar(reduced_design_label)) paste0(" for ", reduced_design_label) else "",
+        "."
       )
       write_repeated_status(replication_status_list, status_path)
       next
@@ -740,7 +787,9 @@ if (run_repeated_recovery) {
 
     message(
       "Running reduced-design recovery replication ", replication, "/",
-      n_replications, "."
+      n_replications,
+      " (", reduced_design$data$S, " states, ", reduced_design$data$Z,
+      " ZIPs, ", reduced_design$data$N, " rows)."
     )
     result <- tryCatch(
       run_one_recovery(
@@ -798,12 +847,16 @@ if (run_repeated_recovery) {
   successful_replications <- replication_status$replication[
     replication_status$completed & replication_status$converged
   ]
-  successful_scalar_paths <- repeated_scalar_path(tables_dir, successful_replications)
+  successful_scalar_paths <- repeated_scalar_path(
+    tables_dir,
+    successful_replications,
+    reduced_output_suffix
+  )
   successful_replications <- successful_replications[file.exists(successful_scalar_paths)]
   if (length(successful_replications) > 0L) {
     repeated_scalar <- do.call(rbind, lapply(successful_replications, function(replication) {
       utils::read.csv(
-        repeated_scalar_path(tables_dir, replication),
+        repeated_scalar_path(tables_dir, replication, reduced_output_suffix),
         stringsAsFactors = FALSE
       )
     }))
@@ -824,7 +877,7 @@ if (run_repeated_recovery) {
   }
   utils::write.csv(
     repeated_metrics,
-    repeated_metrics_path(tables_dir),
+    repeated_metrics_path(tables_dir, reduced_output_suffix),
     row.names = FALSE
   )
 } else {
@@ -832,9 +885,9 @@ if (run_repeated_recovery) {
     "Skipping repeated reduced-design recovery because ",
     "RECOVERY_RUN_REPEATED=false."
   )
-  if (file.exists(repeated_status_path(tables_dir))) {
+  if (file.exists(repeated_status_path(tables_dir, reduced_output_suffix))) {
     replication_status <- normalise_repeated_status(
-      read_repeated_status(repeated_status_path(tables_dir))
+      read_repeated_status(repeated_status_path(tables_dir, reduced_output_suffix))
     )
     successful_replications <- replication_status$replication[
       replication_status$completed & replication_status$converged
@@ -860,7 +913,9 @@ if (run_repeated_recovery && length(successful_replications) < n_replications) {
   warning(
     length(successful_replications), " of ", n_replications,
     " reduced-design replications completed and met the pre-specified convergence criteria. ",
-    "Inspect simulation_recovery_repeated_fit_status.csv before interpreting coverage.",
+    "Inspect ",
+    basename(repeated_status_path(tables_dir, reduced_output_suffix)),
+    " before interpreting coverage.",
     call. = FALSE
   )
 }
@@ -871,7 +926,9 @@ message(
   if (run_repeated_recovery) {
     paste0(
       length(successful_replications), "/", n_replications,
-      " reduced-design replications completed and converged. "
+      " reduced-design replications completed and converged",
+      if (nzchar(reduced_design_label)) paste0(" for ", reduced_design_label) else "",
+      ". "
     )
   } else {
     "Repeated reduced-design recovery was skipped. "
