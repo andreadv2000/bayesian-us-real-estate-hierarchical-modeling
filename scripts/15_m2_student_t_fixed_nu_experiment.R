@@ -19,14 +19,21 @@ student_t_fixed_read_positive_number <- function(name, default) {
   parsed
 }
 
-student_t_fixed_default_label <- function(nu) {
-  paste0("nu", gsub("\\.", "p", format(nu, trim = TRUE, scientific = FALSE)))
+student_t_fixed_format_number <- function(value) {
+  gsub("\\.", "p", format(value, trim = TRUE, scientific = FALSE))
 }
 
-student_t_fixed_read_label <- function(name, nu) {
+student_t_fixed_default_label <- function(nu, geo_sd_prior_scale) {
+  paste0(
+    "nu", student_t_fixed_format_number(nu),
+    "_geo", student_t_fixed_format_number(geo_sd_prior_scale)
+  )
+}
+
+student_t_fixed_read_label <- function(name, nu, geo_sd_prior_scale) {
   value <- trimws(Sys.getenv(name, unset = ""))
   if (!nzchar(value)) {
-    return(student_t_fixed_default_label(nu))
+    return(student_t_fixed_default_label(nu, geo_sd_prior_scale))
   }
   if (!grepl("^[A-Za-z0-9_-]+$", value)) {
     stop(
@@ -97,6 +104,8 @@ fit_student_t_fixed_m2 <- function(model_file, data_list, parameters, settings,
   }
   data_list <- augment_zip_centering_data(data_list)
   data_list$nu <- settings$nu
+  data_list$tau_state_prior <- 1 / (settings$geo_sd_prior_scale^2)
+  data_list$tau_zip_prior <- 1 / (settings$geo_sd_prior_scale^2)
   inits <- make_student_t_fixed_inits(data_list, settings$n_chains, settings$seed)
 
   student_t_timestamp_message("Compiling fixed-nu Student-t M2 with nu=", settings$nu, ".")
@@ -172,6 +181,10 @@ run_student_t_fixed_m2_experiment <- function(
     tables_dir = here::here("output", "tables"),
     figures_dir = here::here("output", "figures")) {
   fixed_nu <- student_t_fixed_read_positive_number("STUDENT_T_FIXED_NU_M2_NU", 4)
+  geo_sd_prior_scale <- student_t_fixed_read_positive_number(
+    "STUDENT_T_FIXED_NU_M2_GEO_SD_PRIOR_SCALE",
+    0.3
+  )
   settings <- list(
     n_chains = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_N_CHAINS", 4L),
     n_adapt = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_N_ADAPT", 2000L),
@@ -184,7 +197,12 @@ run_student_t_fixed_m2_experiment <- function(
     max_ppc_draws = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_MAX_PPC_DRAWS", 1000L),
     force = student_t_read_flag("STUDENT_T_FIXED_NU_M2_FORCE", default = FALSE),
     nu = fixed_nu,
-    label = student_t_fixed_read_label("STUDENT_T_FIXED_NU_M2_LABEL", fixed_nu)
+    geo_sd_prior_scale = geo_sd_prior_scale,
+    label = student_t_fixed_read_label(
+      "STUDENT_T_FIXED_NU_M2_LABEL",
+      fixed_nu,
+      geo_sd_prior_scale
+    )
   )
   if (settings$nu <= 2) {
     stop("STUDENT_T_FIXED_NU_M2_NU must be greater than 2 for finite residual variance.", call. = FALSE)
@@ -218,6 +236,7 @@ run_student_t_fixed_m2_experiment <- function(
     data.frame(
       residual_distribution = "Student-t scale mixture",
       nu = settings$nu,
+      geo_sd_prior_scale = settings$geo_sd_prior_scale,
       label = settings$label,
       stringsAsFactors = FALSE
     ),
@@ -249,6 +268,7 @@ run_student_t_fixed_m2_experiment <- function(
       ", thin=", settings$thin,
       ", chunk=", settings$chunk_iter,
       ", nu=", settings$nu,
+      ", geo_sd_prior_scale=", settings$geo_sd_prior_scale,
       "."
     )
     fit <- fit_student_t_fixed_m2(
