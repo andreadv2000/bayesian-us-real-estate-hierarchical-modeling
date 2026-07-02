@@ -19,6 +19,25 @@ student_t_fixed_read_positive_number <- function(name, default) {
   parsed
 }
 
+student_t_fixed_default_label <- function(nu) {
+  paste0("nu", gsub("\\.", "p", format(nu, trim = TRUE, scientific = FALSE)))
+}
+
+student_t_fixed_read_label <- function(name, nu) {
+  value <- trimws(Sys.getenv(name, unset = ""))
+  if (!nzchar(value)) {
+    return(student_t_fixed_default_label(nu))
+  }
+  if (!grepl("^[A-Za-z0-9_-]+$", value)) {
+    stop(
+      "Environment variable `", name,
+      "` may contain only letters, numbers, underscores, and hyphens.",
+      call. = FALSE
+    )
+  }
+  value
+}
+
 make_student_t_fixed_inits <- function(data_list, n_chains, seed) {
   set.seed(seed)
   lapply(seq_len(n_chains), function(chain_id) {
@@ -112,7 +131,8 @@ add_fixed_nu_column <- function(draw_matrix, nu) {
   cbind(draw_matrix, nu = rep(nu, nrow(draw_matrix)))
 }
 
-write_student_t_fixed_comparison_tables <- function(heldout_metrics, ppc_summary, tables_dir) {
+write_student_t_fixed_comparison_tables <- function(heldout_metrics, ppc_summary,
+                                                    tables_dir, output_stem) {
   production_metrics_path <- file.path(tables_dir, "heldout_predictive_metrics.csv")
   if (file.exists(production_metrics_path)) {
     production_metrics <- readr::read_csv(production_metrics_path, show_col_types = FALSE)
@@ -120,7 +140,7 @@ write_student_t_fixed_comparison_tables <- function(heldout_metrics, ppc_summary
     if (nrow(production_m2) == 1L) {
       readr::write_csv(
         rbind(production_m2, heldout_metrics),
-        file.path(tables_dir, "m2_student_t_fixednu_vs_m2_heldout_comparison.csv")
+        file.path(tables_dir, paste0(output_stem, "_vs_m2_heldout_comparison.csv"))
       )
     }
   }
@@ -140,7 +160,7 @@ write_student_t_fixed_comparison_tables <- function(heldout_metrics, ppc_summary
     )
     readr::write_csv(
       comparison,
-      file.path(tables_dir, "m2_student_t_fixednu_vs_m2_ppc_comparison.csv")
+      file.path(tables_dir, paste0(output_stem, "_vs_m2_ppc_comparison.csv"))
     )
   }
 }
@@ -151,6 +171,7 @@ run_student_t_fixed_m2_experiment <- function(
     mcmc_output_dir = here::here("output", "mcmc"),
     tables_dir = here::here("output", "tables"),
     figures_dir = here::here("output", "figures")) {
+  fixed_nu <- student_t_fixed_read_positive_number("STUDENT_T_FIXED_NU_M2_NU", 4)
   settings <- list(
     n_chains = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_N_CHAINS", 4L),
     n_adapt = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_N_ADAPT", 2000L),
@@ -162,7 +183,8 @@ run_student_t_fixed_m2_experiment <- function(
     max_heldout_draws = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_MAX_HELDOUT_DRAWS", 2000L),
     max_ppc_draws = student_t_read_positive_integer("STUDENT_T_FIXED_NU_M2_MAX_PPC_DRAWS", 1000L),
     force = student_t_read_flag("STUDENT_T_FIXED_NU_M2_FORCE", default = FALSE),
-    nu = student_t_fixed_read_positive_number("STUDENT_T_FIXED_NU_M2_NU", 4)
+    nu = fixed_nu,
+    label = student_t_fixed_read_label("STUDENT_T_FIXED_NU_M2_LABEL", fixed_nu)
   )
   if (settings$nu <= 2) {
     stop("STUDENT_T_FIXED_NU_M2_NU must be greater than 2 for finite residual variance.", call. = FALSE)
@@ -182,21 +204,24 @@ run_student_t_fixed_m2_experiment <- function(
   analysis_objects <- readRDS(analysis_objects_path)
   validate_student_t_analysis_objects(analysis_objects)
   parameters <- c("alpha", "beta", "sigma", "sd_state", "sd_zip", "u", "v")
-  draws_path <- file.path(mcmc_output_dir, "m2_student_t_fixednu_draws.rds")
-  partial_draws_path <- file.path(mcmc_output_dir, "m2_student_t_fixednu_draw_chunks_partial.rds")
-  runtime_path <- file.path(tables_dir, "m2_student_t_fixednu_runtime.csv")
+  output_stem <- paste0("m2_student_t_fixednu_", settings$label)
+  model_label <- paste0("M2_student_t_fixednu_", settings$label)
+  draws_path <- file.path(mcmc_output_dir, paste0(output_stem, "_draws.rds"))
+  partial_draws_path <- file.path(mcmc_output_dir, paste0(output_stem, "_draw_chunks_partial.rds"))
+  runtime_path <- file.path(tables_dir, paste0(output_stem, "_runtime.csv"))
 
   readr::write_csv(
     data.frame(setting = names(settings), value = unlist(settings), row.names = NULL),
-    file.path(tables_dir, "m2_student_t_fixednu_settings.csv")
+    file.path(tables_dir, paste0(output_stem, "_settings.csv"))
   )
   readr::write_csv(
     data.frame(
       residual_distribution = "Student-t scale mixture",
       nu = settings$nu,
+      label = settings$label,
       stringsAsFactors = FALSE
     ),
-    file.path(tables_dir, "m2_student_t_fixednu_terms.csv")
+    file.path(tables_dir, paste0(output_stem, "_terms.csv"))
   )
 
   freshness_mtime <- max(
@@ -248,7 +273,7 @@ run_student_t_fixed_m2_experiment <- function(
 
   convergence_started_at <- Sys.time()
   convergence <- summarise_student_t_convergence(draws)
-  convergence_path <- file.path(tables_dir, "m2_student_t_fixednu_posterior_summary.csv")
+  convergence_path <- file.path(tables_dir, paste0(output_stem, "_posterior_summary.csv"))
   readr::write_csv(convergence, convergence_path)
   convergence_seconds <- as.numeric(difftime(Sys.time(), convergence_started_at, units = "secs"))
   student_t_timestamp_message(
@@ -268,10 +293,10 @@ run_student_t_fixed_m2_experiment <- function(
     analysis_objects = analysis_objects,
     draw_ids = heldout_draw_ids
   )
-  heldout$metrics$model <- "M2_student_t_fixednu"
-  heldout$predictions$model <- "M2_student_t_fixednu"
-  heldout_metrics_path <- file.path(tables_dir, "m2_student_t_fixednu_heldout_predictive_metrics.csv")
-  heldout_predictions_path <- file.path(tables_dir, "m2_student_t_fixednu_heldout_predictive_predictions.csv")
+  heldout$metrics$model <- model_label
+  heldout$predictions$model <- model_label
+  heldout_metrics_path <- file.path(tables_dir, paste0(output_stem, "_heldout_predictive_metrics.csv"))
+  heldout_predictions_path <- file.path(tables_dir, paste0(output_stem, "_heldout_predictive_predictions.csv"))
   readr::write_csv(heldout$metrics, heldout_metrics_path)
   readr::write_csv(heldout$predictions, heldout_predictions_path)
 
@@ -288,12 +313,12 @@ run_student_t_fixed_m2_experiment <- function(
     draw_ids = ppc_draw_ids,
     selected_state_ids = selected_state_ids
   )
-  ppc$summary$model <- "M2_student_t_fixednu"
-  ppc$replicated_statistics$model <- "M2_student_t_fixednu"
-  ppc$observed_statistics$model <- "M2_student_t_fixednu"
-  ppc_summary_path <- file.path(tables_dir, "m2_student_t_fixednu_posterior_predictive_check_summary.csv")
-  ppc_replicates_path <- file.path(tables_dir, "m2_student_t_fixednu_posterior_predictive_check_replicates.csv")
-  ppc_figure_path <- file.path(figures_dir, "m2_student_t_fixednu_posterior_predictive_checks.png")
+  ppc$summary$model <- model_label
+  ppc$replicated_statistics$model <- model_label
+  ppc$observed_statistics$model <- model_label
+  ppc_summary_path <- file.path(tables_dir, paste0(output_stem, "_posterior_predictive_check_summary.csv"))
+  ppc_replicates_path <- file.path(tables_dir, paste0(output_stem, "_posterior_predictive_check_replicates.csv"))
+  ppc_figure_path <- file.path(figures_dir, paste0(output_stem, "_posterior_predictive_checks.png"))
   readr::write_csv(ppc$summary, ppc_summary_path)
   readr::write_csv(ppc$replicated_statistics, ppc_replicates_path)
   save_ppc_plot(
@@ -302,7 +327,12 @@ run_student_t_fixed_m2_experiment <- function(
     model = paste0("M2 Student-t residual fixed nu=", settings$nu),
     figure_path = ppc_figure_path
   )
-  write_student_t_fixed_comparison_tables(heldout$metrics, ppc$summary, tables_dir)
+  write_student_t_fixed_comparison_tables(
+    heldout$metrics,
+    ppc$summary,
+    tables_dir,
+    output_stem
+  )
 
   runtime <- data.frame(
     stage = c("fit_or_load_draws", "convergence_summary", "heldout_ppc"),
