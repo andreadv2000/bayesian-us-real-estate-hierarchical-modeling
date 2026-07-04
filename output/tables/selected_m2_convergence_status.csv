@@ -1,0 +1,2 @@
+model,n_parameters,n_converged,max_rhat,min_bulk_ess,min_tail_ess,max_mcse_sd_ratio,fit_seconds
+M2_heteroskedastic_xall_state,665,665,1.00071937843657,6756.31380779527,12558.3087343102,0.0121668706923685,94697.68719816208

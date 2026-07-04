@@ -1,0 +1,4 @@
+stage,status,elapsed_seconds
+fit_or_load_draws,fitted,94697.68719816208
+convergence_summary,completed,43.77194309234619
+heldout_ppc,completed,NA

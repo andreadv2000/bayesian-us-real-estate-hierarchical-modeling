@@ -18,7 +18,8 @@ The version-25 Kaggle archive was downloaded on the date above, extracted locall
 
 1. M0: pooled Bayesian regression.
 2. M1: Bayesian regression with state-level random intercepts.
-3. M2: Bayesian regression with nested state and ZIP-code random intercepts.
+3. Baseline M2: Bayesian regression with nested state and ZIP-code random intercepts.
+4. Caveat-fix branch M2: heteroskedastic state/ZIP model with state-varying residual scale, selected as the official M2 candidate for `codex/fix-main-caveats`.
 
 The response is log listing price. Planned covariates are log living area, log lot size, bedrooms, bathrooms, and listing status.
 
@@ -39,4 +40,6 @@ The response is log listing price. Planned covariates are log living area, log l
 
 ## Current scope
 
-The raw dataset has been downloaded, imported, catalogued, and audited. The audit writes reproducible tables and plots under `output/`. Stratified sampling, JAGS model code, model fitting, and posterior analysis are intentionally deferred to later implementation phases.
+The point-19 pipeline is complete on `main`. This branch, `codex/fix-main-caveats`, keeps the original production M2 as a baseline and promotes `M2_heteroskedastic_xall_state` as the selected M2 candidate for addressing the posterior predictive over-dispersion caveat.
+
+The selected-model manifest is `output/tables/selected_m2_manifest.csv`, with a short branch note in `docs/selected_m2.md`.

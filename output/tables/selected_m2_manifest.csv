@@ -1,0 +1,13 @@
+key,value
+selected_m2_model,M2_heteroskedastic_xall_state
+selected_m2_status,official M2 candidate for codex/fix-main-caveats
+selected_m2_model_file,models/m2_heteroskedastic_state_sigma.jags
+selected_m2_experiment_script,scripts/17_m2_heteroskedastic_experiment.R
+selected_m2_draws,output/mcmc/m2_heteroskedastic_xall_state_draws.rds
+selected_m2_posterior_summary,output/tables/m2_heteroskedastic_xall_state_posterior_summary.csv
+selected_m2_heldout_metrics,output/tables/m2_heteroskedastic_xall_state_heldout_predictive_metrics.csv
+selected_m2_ppc_summary,output/tables/m2_heteroskedastic_xall_state_posterior_predictive_check_summary.csv
+baseline_m2_model,M2
+baseline_m2_model_file,models/m2_state_zip.jags
+baseline_m2_draws,output/mcmc/m2_draws.rds
+selection_basis,"Full fit converged 665/665; improved held-out RMSE/MAE/MLPD and calibrated coverage; reduced PPC IQR/q90 over-dispersion while retaining geographic heterogeneity."

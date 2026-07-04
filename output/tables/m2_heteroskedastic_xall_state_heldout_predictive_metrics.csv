@@ -1,0 +1,2 @@
+model,n_test,n_posterior_draws,RMSE,MAE,coverage_95,total_lppd,MLPD
+M2_heteroskedastic_xall_state,3600,2000,0.4242816674126431,0.28262152398358187,0.955,-1766.3904897745238,-0.4906640249373677
