@@ -1,4 +1,5 @@
-# Fit the M0, M1, and centered M2 models on the frozen training sample.
+# Fit the M0, M1, and selected heteroskedastic M2 models on the frozen
+# training sample.
 #
 # This production fitting stage is checkpointed: each model's draws are saved
 # immediately after that model finishes, before DIC is attempted.  Interrupted
@@ -19,7 +20,7 @@ if (length(missing_fit_packages) > 0L) {
   )
 }
 
-source(here::here("scripts", "00_setup.R"))
+source(here::here("scripts", "12_m2_heteroskedastic_helpers.R"))
 
 read_positive_integer <- function(name, default) {
   value <- Sys.getenv(name, unset = "")
@@ -30,6 +31,19 @@ read_positive_integer <- function(name, default) {
   parsed <- suppressWarnings(as.integer(value))
   if (is.na(parsed) || parsed < 1L) {
     stop("Environment variable `", name, "` must be a positive integer.", call. = FALSE)
+  }
+  parsed
+}
+
+read_positive_number <- function(name, default) {
+  value <- Sys.getenv(name, unset = "")
+  if (!nzchar(value)) {
+    return(as.numeric(default))
+  }
+
+  parsed <- suppressWarnings(as.numeric(value))
+  if (is.na(parsed) || parsed <= 0) {
+    stop("Environment variable `", name, "` must be a positive number.", call. = FALSE)
   }
   parsed
 }
@@ -118,7 +132,11 @@ fit_settings <- list(
   n_burn = read_positive_integer("FIT_N_BURN", 5000L),
   n_iter = read_positive_integer("FIT_N_ITER", 10000L),
   thin = read_positive_integer("FIT_THIN", 1L),
-  seed = read_positive_integer("FIT_SEED", 20260621L)
+  seed = read_positive_integer("FIT_SEED", 20260621L),
+  m2_sigma_prior_center = read_positive_number("FIT_M2_SIGMA_PRIOR_CENTER", 0.5),
+  m2_gamma0_prior_scale = read_positive_number("FIT_M2_GAMMA0_PRIOR_SCALE", 0.5),
+  m2_gamma_prior_scale = read_positive_number("FIT_M2_GAMMA_PRIOR_SCALE", 0.2),
+  m2_sigma_state_prior_scale = read_positive_number("FIT_M2_SIGMA_STATE_PRIOR_SCALE", 0.2)
 )
 selected_models <- read_model_selection("FIT_MODELS")
 force_all <- read_flag("FIT_FORCE", default = FALSE)
@@ -151,27 +169,55 @@ fit_jags_model <- function(model_file, data_list, parameters,
     )
   }
 
+  model_text <- paste(readLines(model_file, warn = FALSE), collapse = "\n")
   set.seed(seed)
   make_inits <- function(chain_id) {
-    list(
+    values <- list(
       alpha = stats::rnorm(1L, 0, 0.2),
       beta = stats::rnorm(data_list$P, 0, 0.1),
       sigma = stats::runif(1L, 0.5, 1.5),
+      gamma0 = stats::rnorm(
+        1L,
+        if ("log_sigma_prior_mean" %in% names(data_list)) {
+          data_list$log_sigma_prior_mean
+        } else {
+          log(0.5)
+        },
+        0.1
+      ),
+      gamma = if ("P_sigma" %in% names(data_list)) {
+        stats::rnorm(data_list$P_sigma, 0, 0.03)
+      } else {
+        numeric(0)
+      },
+      sd_sigma_state = stats::runif(1L, 0.02, 0.2),
       sd_state = stats::runif(1L, 0.1, 0.8),
       sd_zip = stats::runif(1L, 0.1, 0.8),
       .RNG.name = "base::Wichmann-Hill",
       .RNG.seed = as.integer(seed + 1000L * chain_id)
     )
+    if (!grepl("sigma ~", model_text, fixed = TRUE)) {
+      values$sigma <- NULL
+    }
+    if (!grepl("gamma0", model_text, fixed = TRUE)) {
+      values$gamma0 <- NULL
+    }
+    if (!grepl("gamma[", model_text, fixed = TRUE)) {
+      values$gamma <- NULL
+    }
+    if (!grepl("sd_sigma_state", model_text, fixed = TRUE)) {
+      values$sd_sigma_state <- NULL
+    }
+    if (!grepl("sd_state", model_text, fixed = TRUE)) {
+      values$sd_state <- NULL
+    }
+    if (!grepl("sd_zip", model_text, fixed = TRUE)) {
+      values$sd_zip <- NULL
+    }
+    values
   }
 
   inits <- lapply(seq_len(n_chains), make_inits)
-  model_text <- paste(readLines(model_file, warn = FALSE), collapse = "\n")
-  if (!grepl("sd_state", model_text, fixed = TRUE)) {
-    inits <- lapply(inits, function(values) values[setdiff(names(values), "sd_state")])
-  }
-  if (!grepl("sd_zip", model_text, fixed = TRUE)) {
-    inits <- lapply(inits, function(values) values[setdiff(names(values), "sd_zip")])
-  }
 
   model <- rjags::jags.model(
     file = model_file,
@@ -206,7 +252,13 @@ analysis_objects <- readRDS(analysis_path)
 if (!"jags_train" %in% names(analysis_objects)) {
   stop("Analysis objects do not contain the frozen JAGS training data.", call. = FALSE)
 }
-jags_train_m2 <- augment_zip_centering_data(analysis_objects$jags_train)
+jags_train_m2_heteroskedastic <- prepare_heteroskedastic_m2_data(
+  analysis_objects = analysis_objects,
+  sigma_prior_center = fit_settings$m2_sigma_prior_center,
+  gamma0_prior_scale = fit_settings$m2_gamma0_prior_scale,
+  gamma_prior_scale = fit_settings$m2_gamma_prior_scale,
+  sigma_state_prior_scale = fit_settings$m2_sigma_state_prior_scale
+)
 
 mcmc_output_dir <- here::here("output", "mcmc")
 tables_dir <- here::here("output", "tables")
@@ -229,11 +281,14 @@ model_specs <- list(
     output_path = file.path(mcmc_output_dir, "m1_draws.rds")
   ),
   M2 = list(
-    label = "M2: centered state + within-state centered ZIP",
-    model_file = here::here("models", "m2_state_zip.jags"),
-    data = jags_train_m2,
-    parameters = c("alpha", "beta", "sigma", "sd_state", "sd_zip", "u", "v"),
-    output_path = file.path(mcmc_output_dir, "m2_draws.rds")
+    label = "M2: heteroskedastic centered state + within-state centered ZIP",
+    model_file = here::here("models", "m2_heteroskedastic_state_sigma.jags"),
+    data = jags_train_m2_heteroskedastic,
+    parameters = c(
+      "alpha", "beta", "gamma0", "gamma", "sd_sigma_state",
+      "sd_state", "sd_zip", "h", "u", "v"
+    ),
+    output_path = file.path(mcmc_output_dir, "m2_heteroskedastic_xall_state_draws.rds")
   )
 )
 

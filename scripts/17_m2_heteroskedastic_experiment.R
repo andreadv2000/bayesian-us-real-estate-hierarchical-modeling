@@ -1,11 +1,12 @@
-# Experimental heteroskedastic residual M2 caveat check.
+# Selected heteroskedastic residual M2 fit and checks.
 #
-# This model keeps the production M2 mean structure and geographic effects, but
-# replaces the single residual SD with observation-specific residual SDs. The
-# log residual SD depends on property predictors plus a centered state-level
-# residual-scale effect.
+# This model keeps the M2 mean structure and geographic effects, but replaces
+# the single residual SD with observation-specific residual SDs. The log
+# residual SD depends on property predictors plus a centered state-level
+# residual-scale effect.  On the caveat-fix branch, this is the selected M2
+# candidate rather than a discarded experiment.
 
-source(here::here("scripts", "15_m2_student_t_fixed_nu_experiment.R"))
+source(here::here("scripts", "12_m2_heteroskedastic_helpers.R"))
 
 hetero_read_positive_number <- function(name, default) {
   value <- Sys.getenv(name, unset = "")

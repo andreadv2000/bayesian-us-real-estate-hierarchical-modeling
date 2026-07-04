@@ -22,6 +22,8 @@ if (length(missing_comparison_packages) > 0L) {
   )
 }
 
+source(here::here("scripts", "12_m2_heteroskedastic_helpers.R"))
+
 validate_dic_iterations <- function(n_iter) {
   valid <- is.numeric(n_iter) &&
     length(n_iter) == 1L &&
@@ -70,7 +72,7 @@ calculate_and_write_dic <- function(fit_m0, fit_m1, fit_m2,
   fit_objects <- list(
     "M0: pooled" = fit_m0,
     "M1: state" = fit_m1,
-    "M2: state + ZIP" = fit_m2
+    "M2: heteroskedastic state + ZIP" = fit_m2
   )
   invalid_fits <- names(fit_objects)[!vapply(
     fit_objects,
@@ -155,12 +157,20 @@ indexed_parameter_names <- function(prefix, count) {
 required_prediction_parameters <- function(model, n_predictors, n_states,
                                            n_zips) {
   model <- match.arg(model, c("M0", "M1", "M2"))
-  parameters <- c("alpha", "sigma", indexed_parameter_names("beta", n_predictors))
+  parameters <- c("alpha", indexed_parameter_names("beta", n_predictors))
   if (model %in% c("M1", "M2")) {
     parameters <- c(parameters, "sd_state", indexed_parameter_names("u", n_states))
   }
   if (identical(model, "M2")) {
-    parameters <- c(parameters, "sd_zip", indexed_parameter_names("v", n_zips))
+    parameters <- c(
+      parameters,
+      "gamma0", "sd_sigma_state", "sd_zip",
+      indexed_parameter_names("gamma", n_predictors),
+      indexed_parameter_names("h", n_states),
+      indexed_parameter_names("v", n_zips)
+    )
+  } else {
+    parameters <- c(parameters, "sigma")
   }
   parameters
 }
@@ -189,6 +199,11 @@ validate_heldout_inputs <- function(model, draw_matrix, analysis_objects) {
   }
 
   X_test <- as.matrix(analysis_objects$X_test)
+  X_sigma_test <- if ("X_sigma_test" %in% names(analysis_objects)) {
+    as.matrix(analysis_objects$X_sigma_test)
+  } else {
+    X_test
+  }
   test_y <- as.numeric(test$y)
   state_id <- as.integer(test$state_id)
   zip_id <- as.integer(test$zip_id_num)
@@ -196,7 +211,9 @@ validate_heldout_inputs <- function(model, draw_matrix, analysis_objects) {
       nrow(X_test) != length(test_y) ||
       nrow(X_test) != length(state_id) ||
       nrow(X_test) != length(zip_id) ||
-      any(!is.finite(X_test)) || any(!is.finite(test_y)) ||
+      any(!is.finite(X_test)) || any(!is.finite(X_sigma_test)) ||
+      !identical(dim(X_sigma_test), dim(X_test)) ||
+      any(!is.finite(test_y)) ||
       anyNA(state_id) || anyNA(zip_id) ||
       any(state_id < 1L) || any(zip_id < 1L) ||
       any(state_id > length(analysis_objects$state_levels)) ||
@@ -226,11 +243,11 @@ validate_heldout_inputs <- function(model, draw_matrix, analysis_objects) {
       call. = FALSE
     )
   }
-  if (any(draw_matrix[, "sigma"] <= 0)) {
+  if (!identical(model, "M2") && any(draw_matrix[, "sigma"] <= 0)) {
     stop(model, " draws contain a non-positive residual SD.", call. = FALSE)
   }
   if (identical(model, "M2") && any(draw_matrix[, "sd_zip"] <= 0)) {
-    stop("M2 draws contain a non-positive ZIP SD.", call. = FALSE)
+    stop("M2 draws contain a non-positive scale parameter.", call. = FALSE)
   }
 
   invisible(TRUE)
@@ -250,6 +267,21 @@ linear_predictor_for_draw <- function(model, draw, X_test, state_id, zip_id) {
     mu <- mu + unname(draw[zip_names])[zip_id]
   }
   mu
+}
+
+residual_sd_for_draw <- function(model, draw, X_sigma_test, state_id) {
+  model <- match.arg(model, c("M0", "M1", "M2"))
+  if (!identical(model, "M2")) {
+    return(rep(draw["sigma"], nrow(X_sigma_test)))
+  }
+
+  gamma_names <- indexed_parameter_names("gamma", ncol(X_sigma_test))
+  state_sigma_names <- indexed_parameter_names("h", max(state_id))
+  exp(as.vector(
+    draw["gamma0"] +
+      X_sigma_test %*% unname(draw[gamma_names]) +
+      unname(draw[state_sigma_names])[state_id]
+  ))
 }
 
 # Calculate a running log-sum-exp without storing an N_test-by-M likelihood
@@ -278,6 +310,11 @@ evaluate_model_on_holdout <- function(model, draw_matrix, analysis_objects,
 
   test <- analysis_objects$test
   X_test <- as.matrix(analysis_objects$X_test)
+  X_sigma_test <- if ("X_sigma_test" %in% names(analysis_objects)) {
+    as.matrix(analysis_objects$X_sigma_test)
+  } else {
+    X_test
+  }
   test_y <- as.numeric(test$y)
   state_id <- as.integer(test$state_id)
   zip_id <- as.integer(test$zip_id_num)
@@ -301,11 +338,12 @@ evaluate_model_on_holdout <- function(model, draw_matrix, analysis_objects,
     draw <- as.numeric(draw_matrix[draw_ids[draw_position], , drop = TRUE])
     names(draw) <- colnames(draw_matrix)
     mu <- linear_predictor_for_draw(model, draw, X_test, state_id, zip_id)
+    sigma <- residual_sd_for_draw(model, draw, X_sigma_test, state_id)
     posterior_mean_sum <- posterior_mean_sum + mu
     predictive_draws[, draw_position] <-
-      mu + draw["sigma"] * standard_normal_draws[, draw_position]
+      mu + sigma * standard_normal_draws[, draw_position]
 
-    log_density <- stats::dnorm(test_y, mean = mu, sd = draw["sigma"], log = TRUE)
+    log_density <- stats::dnorm(test_y, mean = mu, sd = sigma, log = TRUE)
     if (draw_position == 1L) {
       log_density_max <- log_density
       log_density_sum <- rep(1, n_test)
@@ -365,7 +403,7 @@ run_heldout_predictive_evaluation <- function(
     draws_paths = list(
       M0 = here::here("output", "mcmc", "m0_draws.rds"),
       M1 = here::here("output", "mcmc", "m1_draws.rds"),
-      M2 = here::here("output", "mcmc", "m2_draws.rds")
+      M2 = here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds")
     ),
     analysis_objects_path = here::here("data", "processed", "analysis_objects.rds"),
     tables_dir = here::here("output", "tables"),

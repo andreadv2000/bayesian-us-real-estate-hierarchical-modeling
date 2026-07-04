@@ -1,10 +1,9 @@
 # Planned sensitivity analyses (implementation guide point 18).
 #
-# Run this only after the production M2 fit has converged and the normal-model
-# posterior predictive checks have been reviewed.  The default workflow refits
-# M2 with wider, proper geographic-SD priors and compares posterior and
-# held-out conclusions with the production fit.  The lot-size and Student-t
-# branches are deliberately gated by the conditions specified in the guide.
+# This script is retained as a legacy normal-residual M2 prior-sensitivity
+# check.  On the caveat-fix branch, the official M2 is heteroskedastic; this
+# script still compares the original normal-residual M2 with its wider-prior
+# variant and should be interpreted as baseline sensitivity evidence.
 
 required_sensitivity_packages <- c("coda", "here", "posterior", "readr", "rjags")
 missing_sensitivity_packages <- required_sensitivity_packages[!vapply(
@@ -384,6 +383,119 @@ compare_sensitivity_parameters <- function(production_summary, sensitivity_summa
   comparison
 }
 
+legacy_m2_linear_predictor <- function(draw, X_test, state_id, zip_id) {
+  beta_names <- indexed_parameter_names("beta", ncol(X_test))
+  state_names <- indexed_parameter_names("u", max(state_id))
+  zip_names <- indexed_parameter_names("v", max(zip_id))
+  as.vector(
+    draw["alpha"] +
+      X_test %*% unname(draw[beta_names]) +
+      unname(draw[state_names])[state_id] +
+      unname(draw[zip_names])[zip_id]
+  )
+}
+
+legacy_update_log_density_accumulator <- function(log_max, scaled_sum, log_density) {
+  new_log_max <- pmax(log_max, log_density)
+  list(
+    log_max = new_log_max,
+    scaled_sum =
+      exp(log_max - new_log_max) * scaled_sum +
+      exp(log_density - new_log_max)
+  )
+}
+
+evaluate_legacy_m2_on_holdout <- function(draw_matrix, analysis_objects,
+                                          draw_ids, standard_normal_draws,
+                                          fit_label) {
+  draw_matrix <- as.matrix(draw_matrix)
+  X_test <- as.matrix(analysis_objects$X_test)
+  test_y <- as.numeric(analysis_objects$test$y)
+  state_id <- as.integer(analysis_objects$test$state_id)
+  zip_id <- as.integer(analysis_objects$test$zip_id_num)
+  n_test <- length(test_y)
+  required_parameters <- c(
+    "alpha", "sigma", "sd_zip",
+    indexed_parameter_names("beta", ncol(X_test)),
+    indexed_parameter_names("u", length(analysis_objects$state_levels)),
+    indexed_parameter_names("v", length(analysis_objects$zip_levels))
+  )
+  missing_parameters <- setdiff(required_parameters, colnames(draw_matrix))
+  if (length(missing_parameters) > 0L) {
+    stop(
+      fit_label, " legacy M2 draws are missing: ",
+      paste(missing_parameters, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  posterior_mean_sum <- numeric(n_test)
+  predictive_draws <- matrix(NA_real_, nrow = n_test, ncol = length(draw_ids))
+  log_density_max <- numeric(n_test)
+  log_density_sum <- numeric(n_test)
+  for (draw_position in seq_along(draw_ids)) {
+    draw <- as.numeric(draw_matrix[draw_ids[[draw_position]], , drop = TRUE])
+    names(draw) <- colnames(draw_matrix)
+    mu <- legacy_m2_linear_predictor(draw, X_test, state_id, zip_id)
+    posterior_mean_sum <- posterior_mean_sum + mu
+    predictive_draws[, draw_position] <-
+      mu + draw["sigma"] * standard_normal_draws[, draw_position]
+    log_density <- stats::dnorm(test_y, mean = mu, sd = draw["sigma"], log = TRUE)
+    if (draw_position == 1L) {
+      log_density_max <- log_density
+      log_density_sum <- rep(1, n_test)
+    } else {
+      accumulator <- legacy_update_log_density_accumulator(
+        log_density_max,
+        log_density_sum,
+        log_density
+      )
+      log_density_max <- accumulator$log_max
+      log_density_sum <- accumulator$scaled_sum
+    }
+  }
+
+  posterior_mean <- posterior_mean_sum / length(draw_ids)
+  lower_95 <- apply(
+    predictive_draws, 1L, stats::quantile,
+    probs = 0.025, names = FALSE, type = 8L
+  )
+  upper_95 <- apply(
+    predictive_draws, 1L, stats::quantile,
+    probs = 0.975, names = FALSE, type = 8L
+  )
+  log_predictive_density <- log_density_max + log(log_density_sum) - log(length(draw_ids))
+  covered_95 <- test_y >= lower_95 & test_y <= upper_95
+
+  predictions <- data.frame(
+    model = "legacy_normal_M2",
+    fit = fit_label,
+    test_row = seq_len(n_test),
+    state_id = state_id,
+    zip_id_num = zip_id,
+    observed_standardized_log_price = test_y,
+    posterior_mean_prediction = posterior_mean,
+    lower_95_predictive = lower_95,
+    upper_95_predictive = upper_95,
+    covered_by_95_predictive_interval = covered_95,
+    log_predictive_density = log_predictive_density,
+    row.names = NULL
+  )
+  metrics <- data.frame(
+    model = "legacy_normal_M2",
+    fit = fit_label,
+    n_test = n_test,
+    n_posterior_draws = length(draw_ids),
+    RMSE = sqrt(mean((posterior_mean - test_y)^2)),
+    MAE = mean(abs(posterior_mean - test_y)),
+    coverage_95 = mean(covered_95),
+    total_lppd = sum(log_predictive_density),
+    MLPD = mean(log_predictive_density),
+    row.names = NULL
+  )
+  list(metrics = metrics, predictions = predictions)
+}
+
 evaluate_m2_prior_sensitivity <- function(production_draws, sensitivity_draws,
                                           analysis_objects,
                                           max_predictive_draws = 2000L,
@@ -406,24 +518,20 @@ evaluate_m2_prior_sensitivity <- function(production_draws, sensitivity_draws,
     stats::rnorm(n_test * n_draws), nrow = n_test, ncol = n_draws
   )
 
-  production <- evaluate_model_on_holdout(
-    model = "M2",
+  production <- evaluate_legacy_m2_on_holdout(
     draw_matrix = production_draws,
     analysis_objects = analysis_objects,
     draw_ids = draw_ids,
-    standard_normal_draws = standard_normal_draws
+    standard_normal_draws = standard_normal_draws,
+    fit_label = "Production legacy normal M2"
   )
-  sensitivity <- evaluate_model_on_holdout(
-    model = "M2",
+  sensitivity <- evaluate_legacy_m2_on_holdout(
     draw_matrix = sensitivity_draws,
     analysis_objects = analysis_objects,
     draw_ids = draw_ids,
-    standard_normal_draws = standard_normal_draws
+    standard_normal_draws = standard_normal_draws,
+    fit_label = "Legacy normal M2 with wider geographic-SD priors"
   )
-  production$metrics$fit <- "Production M2"
-  sensitivity$metrics$fit <- "M2 with wider geographic-SD priors"
-  production$predictions$fit <- production$metrics$fit
-  sensitivity$predictions$fit <- sensitivity$metrics$fit
 
   list(
     metrics = rbind(production$metrics, sensitivity$metrics),
@@ -648,15 +756,14 @@ run_planned_sensitivity_analyses <- function(
     )
   }
   student_t_status <- paste(
-    "Not run: no clear normal-residual posterior-predictive failure was confirmed.",
-    "models/m2_student_t_residual.jags is available only if that evidence is",
-    "documented; then refit on the frozen sample and rerun diagnostics, held-out",
-    "evaluation, and posterior predictive checks."
+    "Not run: the caveat-fix branch selected the heteroskedastic M2 instead.",
+    "The discarded Student-t experiment scripts/models were removed after they",
+    "failed to provide a better official M2 candidate."
   )
   decision_log <- data.frame(
     analysis = c("Prior sensitivity", "Lot-size complete-case sensitivity", "Student-t residual extension"),
     status = c(
-      "Run: M2 with wider proper geographic-SD priors (half-normal scale 0.6 vs 0.3).",
+      "Run: legacy normal-residual M2 with wider proper geographic-SD priors (half-normal scale 0.6 vs 0.3).",
       lot_size_status,
       student_t_status
     ),

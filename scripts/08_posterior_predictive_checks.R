@@ -48,7 +48,7 @@ required_indexed_parameter_names <- function(prefix, count) {
 model_parameter_names <- function(model, n_predictors, n_states, n_zips) {
   model <- match.arg(model, c("M0", "M1", "M2"))
   parameters <- c(
-    "alpha", "sigma",
+    "alpha",
     required_indexed_parameter_names("beta", n_predictors)
   )
   if (model %in% c("M1", "M2")) {
@@ -60,9 +60,13 @@ model_parameter_names <- function(model, n_predictors, n_states, n_zips) {
   if (identical(model, "M2")) {
     parameters <- c(
       parameters,
-      "sd_zip",
+      "gamma0", "sd_sigma_state", "sd_zip",
+      required_indexed_parameter_names("gamma", n_predictors),
+      required_indexed_parameter_names("h", n_states),
       required_indexed_parameter_names("v", n_zips)
     )
+  } else {
+    parameters <- c(parameters, "sigma")
   }
   parameters
 }
@@ -136,8 +140,11 @@ validate_ppc_inputs <- function(draw_matrix, analysis_objects, model) {
       call. = FALSE
     )
   }
-  if (any(draw_matrix[, "sigma"] <= 0) ||
-      (identical(model, "M2") && any(draw_matrix[, "sd_zip"] <= 0))) {
+  if ((!identical(model, "M2") && any(draw_matrix[, "sigma"] <= 0)) ||
+      (identical(model, "M2") && (
+        any(draw_matrix[, "sd_zip"] <= 0) ||
+          any(draw_matrix[, "sd_sigma_state"] <= 0)
+      ))) {
     stop(model, " draws contain a non-positive scale parameter.", call. = FALSE)
   }
 
@@ -377,7 +384,7 @@ run_posterior_predictive_checks <- function(
     draws_paths = list(
       M0 = here::here("output", "mcmc", "m0_draws.rds"),
       M1 = here::here("output", "mcmc", "m1_draws.rds"),
-      M2 = here::here("output", "mcmc", "m2_draws.rds")
+      M2 = here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds")
     ),
     analysis_objects_path = here::here("data", "processed", "analysis_objects.rds"),
     tables_dir = here::here("output", "tables"),

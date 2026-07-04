@@ -299,9 +299,9 @@ distributions additionally include variation in a future listing.
 ## Model sequence and partial pooling
 
 For listing `i`, define standardized log price `y_i`, covariate vector
-`\boldsymbol{x}_i`, state `s[i]`, and ZIP group `z[i]`. M0--M2 use identical
-response, covariates, training rows, and priors; only geographic structure
-changes:
+`\boldsymbol{x}_i`, state `s[i]`, and ZIP group `z[i]`. M0 and M1 use a single
+residual scale. The selected M2 keeps the nested state/ZIP mean structure and
+allows the residual scale to vary by listing covariates and state:
 
 $$
 \begin{aligned}
@@ -309,9 +309,11 @@ $$
 && \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta},\\
 \text{M1:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma),
 && \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta} + u_{s[i]},\\
-\text{M2:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma),
+\text{M2:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma_i),
 && \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta}
-+ u_{s[i]} + v_{z[i]}.
++ u_{s[i]} + v_{z[i]},\\
+&\log(\sigma_i) = \gamma_0 +
+\boldsymbol{x}_i^\mathsf{T}\boldsymbol{\gamma} + h_{s[i]}.
 \end{aligned}
 $$
 
@@ -319,14 +321,16 @@ In M2,
 
 $$
 u_s \sim \operatorname{Normal}(0, \mathit{sd}_{\mathrm{state}}), \qquad
-v_z \sim \operatorname{Normal}(0, \mathit{sd}_{\mathrm{ZIP}}).
+v_z \sim \operatorname{Normal}(0, \mathit{sd}_{\mathrm{ZIP}}), \qquad
+h_s \sim \operatorname{Normal}(0, \mathit{sd}_{\sigma,\mathrm{state}}).
 $$
 
 Partial pooling follows from these group distributions. A ZIP with little
 information is estimated less precisely and pulled more toward its population
 mean, while a well-observed ZIP can depart when the data support it. This
-regularises local estimates probabilistically; it does not establish that a
-location causes a price difference.
+regularises local estimates probabilistically. The residual-scale submodel lets
+the predictive interval width vary systematically across listing types and
+states; it does not establish that a location causes a price difference.
 
 ```{r hierarchical-dag, echo=FALSE, fig.cap='Directed acyclic graph for the planned M2 hierarchy. Arrows encode conditional dependence, not causal effects.', fig.width=9, fig.height=5}
 # Theory note: the graph exposes the factorisation. Hyperpriors govern the
@@ -342,15 +346,17 @@ draw_node <- function(x, y, label, fill) {
 draw_arrow <- function(x0, y0, x1, y1) {
   graphics::arrows(x0, y0, x1, y1, length = 0.08, lwd = 1.5, col = "#1B4965")
 }
-draw_node(1.2, 5.0, "priors for\nalpha, beta, sigma", "#D9EDF7")
+draw_node(1.2, 5.0, "priors for\nalpha, beta", "#D9EDF7")
 draw_node(1.2, 2.0, "prior for\nsd_state", "#D9EDF7")
 draw_node(4.0, 2.0, "u[state]", "#CDECCF")
 draw_node(1.2, 0.6, "prior for\nsd_ZIP", "#D9EDF7")
 draw_node(4.0, 0.6, "v[ZIP]", "#CDECCF")
+draw_node(4.0, 5.0, "gamma and\nh[state]", "#D9EDF7")
 draw_node(6.4, 4.1, "property features\nand status", "#FFF2B2")
 draw_node(6.4, 2.2, "mu[i]", "#F6D6D6")
-draw_node(8.8, 2.2, "log price\ny[i]", "#F6D6D6")
+draw_node(8.8, 2.2, "log price\ny[i]\nwith sigma[i]", "#F6D6D6")
 draw_arrow(1.8, 4.8, 5.8, 2.55)
+draw_arrow(4.65, 4.8, 8.25, 2.55)
 draw_arrow(1.8, 2.0, 3.35, 2.0)
 draw_arrow(4.65, 2.05, 5.75, 2.18)
 draw_arrow(1.8, 0.75, 3.35, 0.75)
@@ -590,10 +596,10 @@ emit_code_file(file.path(project_root, "models", "m0_pooled.jags"), "jags")
 emit_code_file(file.path(project_root, "models", "m1_state.jags"), "jags")
 ```
 
-### M2: nested state and ZIP random intercepts
+### M2: heteroskedastic nested state and ZIP random intercepts
 
 ```{r appendix-m2, echo=FALSE, results='asis'}
-emit_code_file(file.path(project_root, "models", "m2_state_zip.jags"), "jags")
+emit_code_file(file.path(project_root, "models", "m2_heteroskedastic_state_sigma.jags"), "jags")
 ```
 
 ## Full diagnostics and session information

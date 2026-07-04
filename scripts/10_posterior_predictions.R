@@ -39,6 +39,10 @@ required_indexed_parameter_names <- function(prefix, count) {
   paste0(prefix, "[", seq_len(count), "]")
 }
 
+is_heteroskedastic_m2_draws <- function(draw_matrix) {
+  "gamma0" %in% colnames(draw_matrix)
+}
+
 validate_prediction_inputs <- function(draw_matrix, analysis_objects) {
   required_objects <- c(
     "train", "X_train", "predictor_names", "state_levels", "zip_levels",
@@ -95,11 +99,21 @@ validate_prediction_inputs <- function(draw_matrix, analysis_objects) {
   }
 
   required_parameters <- c(
-    "alpha", "sigma", "sd_zip",
+    "alpha", "sd_zip",
     required_indexed_parameter_names("beta", ncol(X_train)),
     required_indexed_parameter_names("u", length(analysis_objects$state_levels)),
     required_indexed_parameter_names("v", length(analysis_objects$zip_levels))
   )
+  if (is_heteroskedastic_m2_draws(draw_matrix)) {
+    required_parameters <- c(
+      required_parameters,
+      "gamma0", "sd_sigma_state",
+      required_indexed_parameter_names("gamma", ncol(X_train)),
+      required_indexed_parameter_names("h", length(analysis_objects$state_levels))
+    )
+  } else {
+    required_parameters <- c(required_parameters, "sigma")
+  }
   missing_parameters <- setdiff(required_parameters, colnames(draw_matrix))
   if (length(missing_parameters) > 0L) {
     stop(
@@ -108,8 +122,10 @@ validate_prediction_inputs <- function(draw_matrix, analysis_objects) {
       call. = FALSE
     )
   }
-  if (any(draw_matrix[, "sigma"] <= 0) || any(draw_matrix[, "sd_zip"] <= 0)) {
-    stop("M2 draws must have positive residual and ZIP standard deviations.", call. = FALSE)
+  if (any(draw_matrix[, "sd_zip"] <= 0) ||
+      (!is_heteroskedastic_m2_draws(draw_matrix) && any(draw_matrix[, "sigma"] <= 0)) ||
+      (is_heteroskedastic_m2_draws(draw_matrix) && any(draw_matrix[, "sd_sigma_state"] <= 0))) {
+    stop("M2 draws must have positive scale parameters.", call. = FALSE)
   }
 
   if (!is.numeric(analysis_objects$y_mean) || length(analysis_objects$y_mean) != 1L ||
@@ -143,7 +159,18 @@ posterior_predict_m2 <- function(draw, X, state_id, zip_id,
 
   beta_names <- required_indexed_parameter_names("beta", ncol(X))
   state_names <- required_indexed_parameter_names("u", max(state_id))
-  required_names <- c("alpha", "sigma", "sd_zip", beta_names, state_names)
+  heteroskedastic <- "gamma0" %in% names(draw)
+  required_names <- c("alpha", "sd_zip", beta_names, state_names)
+  if (heteroskedastic) {
+    required_names <- c(
+      required_names,
+      "gamma0",
+      required_indexed_parameter_names("gamma", ncol(X)),
+      required_indexed_parameter_names("h", max(state_id))
+    )
+  } else {
+    required_names <- c(required_names, "sigma")
+  }
   if (include_observed_zip) {
     required_names <- c(
       required_names,
@@ -159,7 +186,7 @@ posterior_predict_m2 <- function(draw, X, state_id, zip_id,
     )
   }
   if (any(!is.finite(X)) || any(!is.finite(draw[required_names])) ||
-      draw["sigma"] <= 0 || draw["sd_zip"] <= 0) {
+      draw["sd_zip"] <= 0 || (!heteroskedastic && draw["sigma"] <= 0)) {
     stop("Prediction inputs contain invalid covariates or scale parameters.", call. = FALSE)
   }
 
@@ -175,7 +202,18 @@ posterior_predict_m2 <- function(draw, X, state_id, zip_id,
   mu <- as.vector(
     draw["alpha"] + X %*% beta + state_component + zip_component
   )
-  stats::rnorm(n_listings, mean = mu, sd = draw["sigma"])
+  if (heteroskedastic) {
+    gamma_names <- required_indexed_parameter_names("gamma", ncol(X))
+    state_sigma_names <- required_indexed_parameter_names("h", max(state_id))
+    sigma <- exp(as.vector(
+      draw["gamma0"] +
+        X %*% unname(draw[gamma_names]) +
+        unname(draw[state_sigma_names])[state_id]
+    ))
+  } else {
+    sigma <- rep(draw["sigma"], n_listings)
+  }
+  stats::rnorm(n_listings, mean = mu, sd = sigma)
 }
 
 unscale_price <- function(y_standardised, y_mean, y_sd) {
@@ -400,7 +438,7 @@ save_prediction_interval_plot <- function(prediction_summary, figure_path) {
     ) +
     ggplot2::geom_point(colour = "#08306B", size = 2.5) +
     ggplot2::labs(
-      title = "M2 posterior predictive price intervals",
+      title = "M2 heteroskedastic posterior predictive price intervals",
       subtitle = "Points are predictive medians; dark and light intervals are 50% and 95% predictive intervals.",
       x = "Predicted listing price (USD)",
       y = NULL
@@ -417,7 +455,7 @@ save_prediction_interval_plot <- function(prediction_summary, figure_path) {
 }
 
 run_posterior_predictions <- function(
-    draws_path = here::here("output", "mcmc", "m2_draws.rds"),
+    draws_path = here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds"),
     analysis_objects_path = here::here("data", "processed", "analysis_objects.rds"),
     tables_dir = here::here("output", "tables"),
     figures_dir = here::here("output", "figures"),

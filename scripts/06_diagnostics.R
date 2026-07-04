@@ -1,4 +1,5 @@
-# Diagnose convergence and Monte Carlo precision for the fitted M2 model.
+# Diagnose convergence and Monte Carlo precision for the selected fitted M2
+# model.
 #
 # This script evaluates every scalar parameter in the production M2 chain. It
 # also creates the trace, rank-histogram, and autocorrelation plots required
@@ -19,7 +20,7 @@ if (length(missing_diagnostic_packages) > 0L) {
   )
 }
 
-draws_path <- here::here("output", "mcmc", "m2_draws.rds")
+draws_path <- here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds")
 if (!file.exists(draws_path)) {
   stop(
     "M2 production draws not found: ", draws_path,
@@ -44,7 +45,7 @@ if (posterior::ndraws(draws_array_m2) == 0L ||
 }
 
 available_parameters <- posterior::variables(draws_array_m2)
-required_parameters <- c("alpha", "sigma", "sd_state", "sd_zip")
+required_parameters <- c("alpha", "gamma0", "sd_sigma_state", "sd_state", "sd_zip")
 missing_parameters <- setdiff(required_parameters, available_parameters)
 if (length(missing_parameters) > 0L) {
   stop(
@@ -114,23 +115,34 @@ if (length(beta_parameters) < 2L || length(state_parameters) < 2L ||
   )
 }
 
+sigma_state_parameters <- select_indexed_parameters("h", 2L)
+if (length(sigma_state_parameters) < 2L) {
+  stop(
+    "M2 draws must contain at least two residual-scale state effects for the ",
+    "pre-specified diagnostic plots.",
+    call. = FALSE
+  )
+}
+
 selected_parameters <- c(
-  "alpha", "sigma", "sd_state", "sd_zip",
-  beta_parameters, state_parameters, zip_parameters
+  "alpha", "gamma0", "sd_sigma_state", "sd_state", "sd_zip",
+  beta_parameters, sigma_state_parameters, state_parameters, zip_parameters
 )
 
 analysis_objects_path <- here::here("data", "processed", "analysis_objects.rds")
 selection_table <- data.frame(
   parameter = selected_parameters,
   diagnostic_group = c(
-    rep("global", 4L),
+    rep("global", 5L),
     rep("fixed_effect", length(beta_parameters)),
+    rep("residual_scale_state_effect", length(sigma_state_parameters)),
     rep("state_effect", length(state_parameters)),
     rep("zip_effect", length(zip_parameters))
   ),
   selection_rule = c(
-    rep("Required global M2 parameter", 4L),
+    rep("Required global M2 parameter", 5L),
     rep("First two design-matrix columns", length(beta_parameters)),
+    rep("First two alphabetically ordered states", length(sigma_state_parameters)),
     rep("First two alphabetically ordered states", length(state_parameters)),
     rep("First three sorted ZIP codes", length(zip_parameters))
   ),
@@ -145,6 +157,7 @@ if (file.exists(analysis_objects_path)) {
   }
   beta_indices <- index_for(beta_parameters)
   state_indices <- index_for(state_parameters)
+  sigma_state_indices <- index_for(sigma_state_parameters)
   zip_indices <- index_for(zip_parameters)
 
   if (!is.null(analysis_objects$predictor_names) &&
@@ -156,6 +169,14 @@ if (file.exists(analysis_objects_path)) {
       length(analysis_objects$state_levels) >= max(state_indices)) {
     selection_table$label[selection_table$diagnostic_group == "state_effect"] <-
       paste0(state_parameters, " (", analysis_objects$state_levels[state_indices], ")")
+  }
+  if (!is.null(analysis_objects$state_levels) &&
+      length(analysis_objects$state_levels) >= max(sigma_state_indices)) {
+    selection_table$label[selection_table$diagnostic_group == "residual_scale_state_effect"] <-
+      paste0(
+        sigma_state_parameters,
+        " (", analysis_objects$state_levels[sigma_state_indices], ")"
+      )
   }
   if (!is.null(analysis_objects$zip_levels) &&
       length(analysis_objects$zip_levels) >= max(zip_indices)) {

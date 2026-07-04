@@ -42,4 +42,4 @@ The response is log listing price. Planned covariates are log living area, log l
 
 The point-19 pipeline is complete on `main`. This branch, `codex/fix-main-caveats`, keeps the original production M2 as a baseline and promotes `M2_heteroskedastic_xall_state` as the selected M2 candidate for addressing the posterior predictive over-dispersion caveat.
 
-The selected-model manifest is `output/tables/selected_m2_manifest.csv`, with a short branch note in `docs/selected_m2.md`.
+The selected-model manifest is `output/tables/selected_m2_manifest.csv`, with a short branch note in `docs/selected_m2.md`. In this branch, the main diagnostics, DIC, held-out comparison, posterior-predictive, posterior-prediction, and point-19 artifact scripts treat the heteroskedastic state/ZIP model as M2.

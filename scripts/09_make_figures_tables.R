@@ -24,7 +24,7 @@ if (length(missing_posterior_summary_packages) > 0L) {
 
 make_m2_posterior_summary_assets <- function() {
 
-draws_path <- here::here("output", "mcmc", "m2_draws.rds")
+draws_path <- here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds")
 analysis_objects_path <- here::here("data", "processed", "analysis_objects.rds")
 if (!file.exists(draws_path)) {
   stop(
@@ -68,7 +68,16 @@ if (length(missing_analysis_objects) > 0L) {
 }
 
 available_parameters <- colnames(draw_matrix_m2)
-required_scalar_parameters <- c("sigma", "sd_state", "sd_zip")
+is_heteroskedastic_m2 <- "gamma0" %in% available_parameters
+required_scalar_parameters <- c("sd_state", "sd_zip")
+if (is_heteroskedastic_m2) {
+  required_scalar_parameters <- c(
+    required_scalar_parameters,
+    "gamma0", "sd_sigma_state"
+  )
+} else {
+  required_scalar_parameters <- c(required_scalar_parameters, "sigma")
+}
 missing_scalar_parameters <- setdiff(required_scalar_parameters, available_parameters)
 if (length(missing_scalar_parameters) > 0L) {
   stop(
@@ -92,6 +101,7 @@ parameter_indices <- function(parameters) {
 beta_parameters <- indexed_parameters("beta")
 state_parameters <- indexed_parameters("u")
 zip_parameters <- indexed_parameters("v")
+gamma_parameters <- indexed_parameters("gamma")
 
 if (length(beta_parameters) != length(analysis_objects$predictor_names)) {
   stop(
@@ -108,6 +118,13 @@ if (length(state_parameters) != length(analysis_objects$state_levels)) {
 if (length(zip_parameters) != length(analysis_objects$zip_levels)) {
   stop(
     "The number of ZIP-effect draws does not match the ZIP lookup.",
+    call. = FALSE
+  )
+}
+if (is_heteroskedastic_m2 &&
+    length(gamma_parameters) != length(analysis_objects$predictor_names)) {
+  stop(
+    "The number of residual-scale gamma draws does not match the saved predictor names.",
     call. = FALSE
   )
 }
@@ -134,33 +151,51 @@ fixed_effects <- fixed_effects[, c(
 )]
 readr::write_csv(fixed_effects, file.path(tables_dir, "m2_fixed_effects.csv"))
 
-sd_difference <- as.numeric(
-  draw_matrix_m2[, "sd_zip"] - draw_matrix_m2[, "sd_state"]
+typical_residual_sd_draws <- function(draw_matrix, analysis_objects) {
+  if (!("gamma0" %in% colnames(draw_matrix))) {
+    return(as.numeric(draw_matrix[, "sigma"]))
+  }
+
+  X_train <- as.matrix(analysis_objects$X_train)
+  gamma_parameters <- paste0("gamma[", seq_len(ncol(X_train)), "]")
+  profile_x <- apply(X_train, 2L, stats::median)
+  exp(as.numeric(
+    draw_matrix[, "gamma0"] +
+      as.vector(draw_matrix[, gamma_parameters, drop = FALSE] %*% profile_x)
+  ))
+}
+
+residual_sd <- typical_residual_sd_draws(draw_matrix_m2, analysis_objects)
+sd_difference <- as.numeric(draw_matrix_m2[, "sd_zip"] - draw_matrix_m2[, "sd_state"])
+variance_quantities <- list(
+  "Typical residual SD" = residual_sd,
+  "State SD" = as.numeric(draw_matrix_m2[, "sd_state"]),
+  "ZIP SD" = as.numeric(draw_matrix_m2[, "sd_zip"]),
+  "ZIP SD - State SD" = sd_difference
 )
+if (is_heteroskedastic_m2) {
+  variance_quantities <- append(
+    variance_quantities,
+    list("Residual-scale state SD" = as.numeric(draw_matrix_m2[, "sd_sigma_state"])),
+    after = 1L
+  )
+}
 hierarchical_summary <- rbind(
-  data.frame(
-    quantity = c("Residual SD", "State SD", "ZIP SD", "ZIP SD - State SD"),
-    posterior_median = c(
-      stats::median(draw_matrix_m2[, "sigma"]),
-      stats::median(draw_matrix_m2[, "sd_state"]),
-      stats::median(draw_matrix_m2[, "sd_zip"]),
-      stats::median(sd_difference)
-    ),
-    lower_95 = c(
-      stats::quantile(draw_matrix_m2[, "sigma"], 0.025, names = FALSE),
-      stats::quantile(draw_matrix_m2[, "sd_state"], 0.025, names = FALSE),
-      stats::quantile(draw_matrix_m2[, "sd_zip"], 0.025, names = FALSE),
-      stats::quantile(sd_difference, 0.025, names = FALSE)
-    ),
-    upper_95 = c(
-      stats::quantile(draw_matrix_m2[, "sigma"], 0.975, names = FALSE),
-      stats::quantile(draw_matrix_m2[, "sd_state"], 0.975, names = FALSE),
-      stats::quantile(draw_matrix_m2[, "sd_zip"], 0.975, names = FALSE),
-      stats::quantile(sd_difference, 0.975, names = FALSE)
-    ),
-    posterior_probability = c(NA_real_, NA_real_, NA_real_, mean(sd_difference > 0)),
-    row.names = NULL
-  ),
+  do.call(rbind, lapply(names(variance_quantities), function(quantity) {
+    values <- variance_quantities[[quantity]]
+    data.frame(
+      quantity = quantity,
+      posterior_median = stats::median(values),
+      lower_95 = stats::quantile(values, 0.025, names = FALSE),
+      upper_95 = stats::quantile(values, 0.975, names = FALSE),
+      posterior_probability = if (identical(quantity, "ZIP SD - State SD")) {
+        mean(values > 0)
+      } else {
+        NA_real_
+      },
+      row.names = NULL
+    )
+  })),
   data.frame(
     quantity = "P(ZIP SD > State SD)",
     posterior_median = NA_real_,
@@ -403,9 +438,20 @@ save_fixed_effect_forest_plot <- function(fixed_effects, figure_path) {
   )
 }
 
-save_variance_component_plot <- function(draw_matrix, figure_path) {
-  parameters <- c("sigma", "sd_state", "sd_zip")
-  missing_parameters <- setdiff(parameters, colnames(draw_matrix))
+save_variance_component_plot <- function(draw_matrix, analysis_objects, figure_path) {
+  is_heteroskedastic <- "gamma0" %in% colnames(draw_matrix)
+  required_parameters <- c("sd_state", "sd_zip")
+  if (is_heteroskedastic) {
+    required_parameters <- c(required_parameters, "gamma0", "sd_sigma_state")
+    X_train <- as.matrix(analysis_objects$X_train)
+    required_parameters <- c(
+      required_parameters,
+      paste0("gamma[", seq_len(ncol(X_train)), "]")
+    )
+  } else {
+    required_parameters <- c(required_parameters, "sigma")
+  }
+  missing_parameters <- setdiff(required_parameters, colnames(draw_matrix))
   if (length(missing_parameters) > 0L) {
     stop(
       "M2 draws are missing variance component(s): ",
@@ -414,22 +460,34 @@ save_variance_component_plot <- function(draw_matrix, figure_path) {
     )
   }
 
-  component_labels <- c(
-    sigma = "Residual SD",
-    sd_state = "State SD",
-    sd_zip = "ZIP SD"
-  )
-  plot_data <- do.call(rbind, lapply(parameters, function(parameter) {
+  if (is_heteroskedastic) {
+    profile_x <- apply(as.matrix(analysis_objects$X_train), 2L, stats::median)
+    gamma_parameters <- paste0("gamma[", seq_along(profile_x), "]")
+    typical_residual_sd <- exp(as.numeric(
+      draw_matrix[, "gamma0"] +
+        as.vector(draw_matrix[, gamma_parameters, drop = FALSE] %*% profile_x)
+    ))
+    component_values <- list(
+      "Typical residual SD" = typical_residual_sd,
+      "Residual-scale state SD" = as.numeric(draw_matrix[, "sd_sigma_state"]),
+      "State SD" = as.numeric(draw_matrix[, "sd_state"]),
+      "ZIP SD" = as.numeric(draw_matrix[, "sd_zip"])
+    )
+  } else {
+    component_values <- list(
+      "Residual SD" = as.numeric(draw_matrix[, "sigma"]),
+      "State SD" = as.numeric(draw_matrix[, "sd_state"]),
+      "ZIP SD" = as.numeric(draw_matrix[, "sd_zip"])
+    )
+  }
+  plot_data <- do.call(rbind, lapply(names(component_values), function(component) {
     data.frame(
-      component = component_labels[[parameter]],
-      value = as.numeric(draw_matrix[, parameter]),
+      component = component,
+      value = component_values[[component]],
       stringsAsFactors = FALSE
     )
   }))
-  plot_data$component <- factor(
-    plot_data$component,
-    levels = unname(component_labels[parameters])
-  )
+  plot_data$component <- factor(plot_data$component, levels = names(component_values))
 
   density_plot <- ggplot2::ggplot(plot_data, ggplot2::aes(x = value)) +
     ggplot2::geom_density(fill = "#6BAED6", colour = "#08519C", alpha = 0.7) +
@@ -993,18 +1051,20 @@ make_report_artifact_manifest <- function(tables_dir, figures_dir) {
 run_report_artifact_pipeline <- function() {
   tables_dir <- here::here("output", "tables")
   figures_dir <- here::here("output", "figures")
-  draws_path <- here::here("output", "mcmc", "m2_draws.rds")
+  draws_path <- here::here("output", "mcmc", "m2_heteroskedastic_xall_state_draws.rds")
   dir.create(tables_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(figures_dir, recursive = TRUE, showWarnings = FALSE)
 
   posterior_assets <- make_m2_posterior_summary_assets()
   draw_matrix <- posterior::as_draws_matrix(readRDS(draws_path))
+  analysis_objects <- readRDS(here::here("data", "processed", "analysis_objects.rds"))
   save_fixed_effect_forest_plot(
     posterior_assets$fixed_effects,
     file.path(figures_dir, "m2_fixed_effect_forest.png")
   )
   save_variance_component_plot(
     draw_matrix,
+    analysis_objects,
     file.path(figures_dir, "m2_variance_component_posteriors.png")
   )
 

@@ -1,4 +1,4 @@
-# Lightweight DIC-only refit for M0, M1, and centered M2.
+# Lightweight DIC-only refit for M0, M1, and selected heteroskedastic M2.
 #
 # rjags::dic.samples() requires a live JAGS model object, so DIC cannot be
 # recomputed from the saved output/mcmc/*.rds posterior draws alone.  This
@@ -13,6 +13,10 @@
 #   DIC_N_BURN    default 5000
 #   DIC_N_ITER    default 5000
 #   DIC_SEED      default 20260623
+#   DIC_M2_SIGMA_PRIOR_CENTER       default 0.5
+#   DIC_M2_GAMMA0_PRIOR_SCALE       default 0.5
+#   DIC_M2_GAMMA_PRIOR_SCALE        default 0.2
+#   DIC_M2_SIGMA_STATE_PRIOR_SCALE  default 0.2
 #   DIC_DRY_RUN   default false; if true, validate inputs and stop before JAGS
 
 required_dic_packages <- c("here", "readr", "rjags", "tibble")
@@ -30,7 +34,7 @@ if (length(missing_dic_packages) > 0L) {
   )
 }
 
-source(here::here("scripts", "00_setup.R"))
+source(here::here("scripts", "12_m2_heteroskedastic_helpers.R"))
 source(here::here("scripts", "07_model_comparison.R"))
 
 read_dic_positive_integer <- function(name, default) {
@@ -42,6 +46,19 @@ read_dic_positive_integer <- function(name, default) {
   parsed <- suppressWarnings(as.integer(value))
   if (is.na(parsed) || parsed < 1L) {
     stop("Environment variable `", name, "` must be a positive integer.", call. = FALSE)
+  }
+  parsed
+}
+
+read_dic_positive_number <- function(name, default) {
+  value <- Sys.getenv(name, unset = "")
+  if (!nzchar(value)) {
+    return(as.numeric(default))
+  }
+
+  parsed <- suppressWarnings(as.numeric(value))
+  if (is.na(parsed) || parsed <= 0) {
+    stop("Environment variable `", name, "` must be a positive number.", call. = FALSE)
   }
   parsed
 }
@@ -125,11 +142,38 @@ make_dic_inits <- function(data_list, model_file, n_chains, seed) {
       alpha = stats::rnorm(1L, 0, 0.2),
       beta = stats::rnorm(data_list$P, 0, 0.1),
       sigma = stats::runif(1L, 0.5, 1.5),
+      gamma0 = stats::rnorm(
+        1L,
+        if ("log_sigma_prior_mean" %in% names(data_list)) {
+          data_list$log_sigma_prior_mean
+        } else {
+          log(0.5)
+        },
+        0.1
+      ),
+      gamma = if ("P_sigma" %in% names(data_list)) {
+        stats::rnorm(data_list$P_sigma, 0, 0.03)
+      } else {
+        numeric(0)
+      },
+      sd_sigma_state = stats::runif(1L, 0.02, 0.2),
       sd_state = stats::runif(1L, 0.1, 0.8),
       sd_zip = stats::runif(1L, 0.1, 0.8),
       .RNG.name = "base::Wichmann-Hill",
       .RNG.seed = as.integer(seed + 1000L * chain_id)
     )
+    if (!grepl("sigma ~", model_text, fixed = TRUE)) {
+      values$sigma <- NULL
+    }
+    if (!grepl("gamma0", model_text, fixed = TRUE)) {
+      values$gamma0 <- NULL
+    }
+    if (!grepl("gamma[", model_text, fixed = TRUE)) {
+      values$gamma <- NULL
+    }
+    if (!grepl("sd_sigma_state", model_text, fixed = TRUE)) {
+      values$sd_sigma_state <- NULL
+    }
     if (!grepl("sd_state", model_text, fixed = TRUE)) {
       values$sd_state <- NULL
     }
@@ -181,6 +225,10 @@ run_lightweight_dic <- function(
     n_burn = read_dic_positive_integer("DIC_N_BURN", 5000L),
     n_iter = read_dic_positive_integer("DIC_N_ITER", 5000L),
     seed = read_dic_positive_integer("DIC_SEED", 20260623L),
+    m2_sigma_prior_center = read_dic_positive_number("DIC_M2_SIGMA_PRIOR_CENTER", 0.5),
+    m2_gamma0_prior_scale = read_dic_positive_number("DIC_M2_GAMMA0_PRIOR_SCALE", 0.5),
+    m2_gamma_prior_scale = read_dic_positive_number("DIC_M2_GAMMA_PRIOR_SCALE", 0.2),
+    m2_sigma_state_prior_scale = read_dic_positive_number("DIC_M2_SIGMA_STATE_PRIOR_SCALE", 0.2),
     dry_run = read_dic_flag("DIC_DRY_RUN", default = FALSE)) {
   if (!file.exists(analysis_objects_path)) {
     stop(
@@ -206,7 +254,13 @@ run_lightweight_dic <- function(
   }
 
   jags_train <- analysis_objects$jags_train
-  jags_train_m2 <- augment_zip_centering_data(jags_train)
+  jags_train_m2 <- prepare_heteroskedastic_m2_data(
+    analysis_objects = analysis_objects,
+    sigma_prior_center = m2_sigma_prior_center,
+    gamma0_prior_scale = m2_gamma0_prior_scale,
+    gamma_prior_scale = m2_gamma_prior_scale,
+    sigma_state_prior_scale = m2_sigma_state_prior_scale
+  )
   model_specs <- list(
     list(
       key = "M0",
@@ -222,14 +276,17 @@ run_lightweight_dic <- function(
     ),
     list(
       key = "M2",
-      label = "M2: state + ZIP",
-      model_file = here::here("models", "m2_state_zip.jags"),
+      label = "M2: heteroskedastic state + ZIP",
+      model_file = here::here("models", "m2_heteroskedastic_state_sigma.jags"),
       data = select_jags_data(
         jags_train_m2,
         c(
           "N", "P", "y", "X", "S", "Z", "state", "zip",
           "K", "zip_state", "n_zips_by_state",
-          "zip_in_state", "zip_in_state_weight"
+          "zip_in_state", "zip_in_state_weight",
+          "X_sigma", "P_sigma", "log_sigma_prior_mean",
+          "tau_gamma0_prior", "tau_gamma_prior",
+          "tau_sigma_state_prior"
         )
       )
     )
@@ -252,7 +309,9 @@ run_lightweight_dic <- function(
   settings <- tibble::tibble(
     setting = c(
       "workflow", "n_chains", "n_adapt", "n_burn", "n_dic_iter",
-      "seed", "analysis_objects_path"
+      "seed", "m2_sigma_prior_center", "m2_gamma0_prior_scale",
+      "m2_gamma_prior_scale", "m2_sigma_state_prior_scale",
+      "analysis_objects_path"
     ),
     value = c(
       "lightweight_dic_only_refit",
@@ -261,6 +320,10 @@ run_lightweight_dic <- function(
       as.character(n_burn),
       as.character(n_iter),
       as.character(seed),
+      as.character(m2_sigma_prior_center),
+      as.character(m2_gamma0_prior_scale),
+      as.character(m2_gamma_prior_scale),
+      as.character(m2_sigma_state_prior_scale),
       analysis_objects_path
     )
   )
