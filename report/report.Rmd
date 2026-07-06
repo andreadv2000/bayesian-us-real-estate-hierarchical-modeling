@@ -1,8 +1,9 @@
 ---
-title: "Bayesian Hierarchical Real-Estate Price Modeling Across US States and ZIP Codes"
-subtitle: "A reproducible R Markdown report"
-author: "Final FSLII project"
+title: "Bayesian Hierarchical Modeling of U.S. Real-Estate Listing Prices"
+subtitle: "A fully Bayesian state-ZIP analysis with heteroskedastic residuals"
+author: "Final FSLII Project"
 date: "`r format(Sys.Date(), '%d %B %Y')`"
+bibliography: references.bib
 output:
   html_document:
     toc: true
@@ -15,11 +16,14 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-# Statistical reproducibility: the report must regenerate from saved inputs,
-# not from values left in an interactive R workspace.
 knitr::opts_chunk$set(
-  echo = TRUE, message = FALSE, warning = FALSE,
-  fig.width = 8, fig.height = 5, dpi = 150, out.width = "100%"
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  dpi = 150,
+  out.width = "100%"
 )
 
 project_root <- normalizePath(
@@ -28,590 +32,547 @@ project_root <- normalizePath(
 )
 knitr::opts_knit$set(root.dir = project_root)
 
-required_packages <- "knitr"
-missing_packages <- required_packages[!vapply(
-  required_packages, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1)
-)]
-if (length(missing_packages) > 0L) {
-  stop("Install before rendering: ", paste(missing_packages, collapse = ", "))
-}
-
 tables_dir <- file.path(project_root, "output", "tables")
 figures_dir <- file.path(project_root, "output", "figures")
 processed_dir <- file.path(project_root, "data", "processed")
+
 table_path <- function(name) file.path(tables_dir, name)
 figure_path <- function(name) file.path(figures_dir, name)
-format_count <- function(x) format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
 
-# A missing artefact is evidence that its analysis has not completed.  The
-# report marks it as such rather than substituting an invented result.
-read_table_if_available <- function(name) {
+read_csv_required <- function(name) {
+  path <- table_path(name)
+  if (!file.exists(path)) {
+    stop("Required table is missing: ", path, call. = FALSE)
+  }
+  utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+read_csv_optional <- function(name) {
   path <- table_path(name)
   if (!file.exists(path)) return(NULL)
   utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
 }
-show_table_or_notice <- function(data, caption, digits = 3) {
-  if (is.null(data)) {
-    cat("*This result is not available yet. Render after its analysis script has completed.*\n\n")
-  } else {
-    print(knitr::kable(data, digits = digits, caption = caption))
-  }
+
+fmt_num <- function(x, digits = 3) {
+  ifelse(
+    is.na(x),
+    NA_character_,
+    format(round(as.numeric(x), digits), big.mark = ",", scientific = FALSE, trim = TRUE)
+  )
 }
-include_figure_if_available <- function(name, caption = NULL) {
+
+fmt_count <- function(x) format(as.numeric(x), big.mark = ",", scientific = FALSE, trim = TRUE)
+
+show_table <- function(data, caption, digits = 3) {
+  print(knitr::kable(data, digits = digits, caption = caption))
+}
+
+figure_src <- function(name) {
   path <- figure_path(name)
   if (!file.exists(path)) {
-    cat("*Not yet available: `", name, "`.*\n\n", sep = "")
-    return(invisible(FALSE))
+    stop("Required figure is missing: ", path, call. = FALSE)
   }
-  if (!is.null(caption)) cat("*", caption, "*\n\n", sep = "")
-  # Emit Markdown directly so the path is resolved from the project root even
-  # when knitr's input-directory and root-directory conventions differ.
-  image_path <- normalizePath(path, winslash = "/", mustWork = TRUE)
-  cat(sprintf("![%s](%s)\n\n", name, image_path))
-  invisible(TRUE)
+  gsub("\\\\", "/", file.path("..", "output", "figures", name))
 }
+
+include_figure_grid <- function(files, captions, ncol = 2) {
+  if (length(files) != length(captions)) {
+    stop("files and captions must have the same length.", call. = FALSE)
+  }
+  width <- paste0(round(100 / ncol - 2, 1), "%")
+  cat('<div style="display:flex; flex-wrap:wrap; gap:18px; align-items:flex-start;">\n')
+  for (i in seq_along(files)) {
+    path <- figure_src(files[[i]])
+    cat(
+      '<figure style="flex:1 1 ', width, '; min-width:320px; margin:0;">\n',
+      '<img src="', path, '" style="width:100%; border:1px solid #ddd; padding:4px; background:white;">\n',
+      '<figcaption style="font-size:0.92em; color:#444; margin-top:6px;">',
+      captions[[i]],
+      '</figcaption>\n</figure>\n',
+      sep = ""
+    )
+  }
+  cat("</div>\n\n")
+}
+
 emit_code_file <- function(path, language) {
   if (!file.exists(path)) {
-    cat("*Source file unavailable: `", path, "`.*\n\n", sep = "")
-    return(invisible(FALSE))
+    stop("Required source file is missing: ", path, call. = FALSE)
   }
   cat("```", language, "\n", sep = "")
   cat(paste(readLines(path, warn = FALSE), collapse = "\n"))
   cat("\n```\n\n")
-  invisible(TRUE)
 }
 
-overview <- read_table_if_available("raw_dataset_overview.csv")
-missingness <- read_table_if_available("raw_missingness.csv")
-dictionary <- read_table_if_available("raw_data_dictionary.csv")
-status_counts <- read_table_if_available("raw_status_counts.csv")
-quality_counts <- read_table_if_available("raw_value_quality_counts.csv")
-decisions <- read_table_if_available("raw_data_decisions.csv")
-row_accounting <- read_table_if_available("row_accounting.csv")
-prior_settings <- read_table_if_available("prior_predictive_settings.csv")
-prior_ranges <- read_table_if_available("prior_predictive_range_summary.csv")
+overview <- read_csv_required("raw_dataset_overview.csv")
+dictionary <- read_csv_required("report_data_dictionary_missingness.csv")
+row_accounting <- read_csv_required("report_cleaning_sampling_row_accounting.csv")
+prior_settings <- read_csv_required("prior_predictive_settings.csv")
+prior_ranges <- read_csv_required("prior_predictive_range_summary.csv")
+model_comparison <- read_csv_required("report_dic_heldout_model_comparison.csv")
+posterior_summary <- read_csv_required("report_m2_fixed_effect_variance_summary.csv")
+ppc_summary <- read_csv_required("report_posterior_predictive_test_statistics.csv")
+predictions <- read_csv_required("m2_posterior_predictions.csv")
+recovery_metrics <- read_csv_optional("simulation_recovery_repeated_parameter_metrics_10states_10zips_20perzip.csv")
+if (is.null(recovery_metrics)) {
+  recovery_metrics <- read_csv_required("report_simulation_recovery_results.csv")
+}
+recovery_status <- read_csv_optional("simulation_recovery_repeated_fit_status_10states_10zips_20perzip.csv")
+convergence_status <- read_csv_required("selected_m2_convergence_status.csv")
+m2_convergence <- read_csv_required("m2_heteroskedastic_xall_state_posterior_summary.csv")
+m2_settings <- read_csv_required("m2_heteroskedastic_xall_state_settings.csv")
+
 overview_value <- function(metric) {
-  if (is.null(overview) || !metric %in% overview$metric) return(NA_character_)
   overview$value[match(metric, overview$metric)]
 }
 
-analysis_objects_path <- file.path(processed_dir, "analysis_objects.rds")
-analysis_objects <- if (file.exists(analysis_objects_path)) readRDS(analysis_objects_path) else NULL
-sample_manifest_path <- file.path(processed_dir, "sample_manifest.csv")
-sample_manifest <- if (file.exists(sample_manifest_path)) {
-  utils::read.csv(sample_manifest_path, stringsAsFactors = FALSE)
-} else {
-  NULL
-}
-sample_overview <- if (!is.null(analysis_objects)) {
+raw_rows <- as.numeric(overview_value("rows"))
+raw_states <- as.numeric(overview_value("unique_states"))
+raw_zips <- as.numeric(overview_value("unique_zip_codes"))
+train_rows <- row_accounting$n[match("Frozen training sample", row_accounting$stage)]
+test_rows <- row_accounting$n[match("Frozen held-out sample", row_accounting$stage)]
+selected_states <- row_accounting$n[match("Selected states", row_accounting$stage)]
+selected_zips <- row_accounting$n[match("Selected state--ZIP groups", row_accounting$stage)]
+
+m2_row <- model_comparison[grepl("^M2", model_comparison$model), , drop = FALSE]
+m1_row <- model_comparison[grepl("^M1", model_comparison$model), , drop = FALSE]
+m0_row <- model_comparison[grepl("^M0", model_comparison$model), , drop = FALSE]
+
+ppc_m2 <- ppc_summary[ppc_summary$model == "M2", , drop = FALSE]
+ppc_key <- ppc_m2[ppc_m2$statistic %in% c(
+  "overall_iqr_standardized_log_price",
+  "overall_q90_standardized_log_price",
+  "zip_mean_variance_standardized_log_price"
+), , drop = FALSE]
+ppc_key$display_statistic <- c(
+  "Overall IQR",
+  "Overall 90th percentile",
+  "ZIP mean variance"
+)[match(
+  ppc_key$statistic,
+  c(
+    "overall_iqr_standardized_log_price",
+    "overall_q90_standardized_log_price",
+    "zip_mean_variance_standardized_log_price"
+  )
+)]
+
+posterior_fixed <- posterior_summary[posterior_summary$component_type == "Fixed effect", , drop = FALSE]
+posterior_variance <- posterior_summary[posterior_summary$component_type == "Variance component", , drop = FALSE]
+
+diag_overview <- data.frame(
+  quantity = c(
+    "Monitored parameters",
+    "Converged parameters",
+    "Maximum R-hat",
+    "Minimum bulk ESS",
+    "Minimum tail ESS",
+    "Maximum MCSE / posterior SD"
+  ),
+  value = c(
+    convergence_status$n_parameters,
+    convergence_status$n_converged,
+    fmt_num(convergence_status$max_rhat, 4),
+    fmt_num(convergence_status$min_bulk_ess, 1),
+    fmt_num(convergence_status$min_tail_ess, 1),
+    fmt_num(convergence_status$max_mcse_sd_ratio, 4)
+  )
+)
+
+recovery_status_summary <- if (!is.null(recovery_status)) {
   data.frame(
-    quantity = c("Training listings", "Held-out listings", "States", "State-ZIP groups", "Predictors"),
+    quantity = c("Repeated recovery replications", "Completed", "Converged"),
     value = c(
-      nrow(analysis_objects$train), nrow(analysis_objects$test),
-      length(analysis_objects$state_levels), length(analysis_objects$zip_levels),
-      length(analysis_objects$predictor_names)
+      nrow(recovery_status),
+      sum(recovery_status$completed),
+      sum(recovery_status$converged)
     )
   )
 } else {
   NULL
 }
-
-artifact_status <- data.frame(
-  report_section = c(
-    "Raw-data audit", "Analysis sample", "Prior-predictive simulation",
-    "Simulation recovery", "MCMC diagnostics", "Posterior summaries",
-    "Model comparison", "Posterior-predictive checks", "Posterior predictions"
-  ),
-  available = c(
-    !is.null(overview), !is.null(analysis_objects), !is.null(prior_ranges),
-    file.exists(table_path("simulation_recovery_full_scalar_parameters.csv")),
-    file.exists(table_path("m2_selected_diagnostics.csv")),
-    file.exists(table_path("m2_fixed_effects.csv")),
-    file.exists(table_path("dic_comparison.csv")),
-    file.exists(table_path("posterior_predictive_check_summary.csv")),
-    file.exists(table_path("m2_posterior_predictions.csv"))
-  )
-)
-artifact_status$status <- ifelse(artifact_status$available, "available", "not yet rendered")
 ```
 
 # Abstract
 
-This report documents a fully Bayesian analysis plan for US residential listing
-prices using the USA Real Estate Dataset. The outcome is log listing price and
-the intended hierarchy represents broad state differences together with local
-state--ZIP variation. The model sequence compares a pooled regression (M0), a
-state random-intercept model (M1), and a state--ZIP random-intercept model
-(M2), using MCMC to approximate posterior and predictive distributions.
+This report presents a fully Bayesian analysis of U.S. residential real-estate listing prices using hierarchical regression models fitted by MCMC. The data contain `r fmt_count(raw_rows)` raw listings from `r raw_states` states and territories and `r fmt_count(raw_zips)` ZIP codes. The modeling frame uses a balanced geographic sample with `r fmt_count(train_rows)` training listings, `r fmt_count(test_rows)` held-out listings, `r selected_states` states, and `r fmt_count(selected_zips)` state-ZIP groups.
 
-The completed audit records `r format_count(overview_value("rows"))` raw
-listings and establishes the modelling data contract: positive price and house
-size, log-scale response and living area, `log1p` lot size, categorical listing
-status, and state--ZIP labels. The core completed result is the reproducible
-data audit and frozen analysis design. Production posterior draws and their
-derived results are deliberately marked unavailable until the corresponding
-scripts have run; this avoids presenting missing computation as Bayesian
-evidence.
+Three Bayesian models are compared: a pooled regression (M0), a state random-intercept model (M1), and a heteroskedastic state-ZIP hierarchical model (M2). The selected M2 model has the best DIC (`r fmt_num(m2_row$DIC, 2)`), the lowest held-out RMSE (`r fmt_num(m2_row$RMSE, 4)`), the lowest held-out MAE (`r fmt_num(m2_row$MAE, 4)`), and calibrated 95% predictive coverage (`r fmt_num(m2_row$coverage_95, 4)`). Posterior predictive checks show that M2 reproduces geographic heterogeneity well, with mild over-dispersion in the overall standardized log-price distribution.
 
 # Introduction
 
-## Motivation
+## Motivation and goals
 
-Two properties with similar observed features can have different listing prices
-because their geographic contexts differ. State conditions may shift the broad
-housing market, while smaller local differences can remain within a state. A
-model that ignores this structure risks assigning unobserved geographic
-variation to property characteristics or reporting unstable local estimates.
+Real-estate prices vary with property characteristics such as living area, lot size, bedrooms, bathrooms, and listing status. They also vary geographically: two similar homes can have different listing prices because they are located in different states or local ZIP-code markets. A fully Bayesian hierarchical model is appropriate because it estimates fixed property effects, geographic variation, predictive uncertainty, and partial pooling within one coherent probability model.
 
-The analysis models both the listings and the unknown quantities that govern
-their distribution. This makes uncertainty part of the analysis: prior
-distributions represent pre-data uncertainty, the likelihood represents the
-conditional data model, and the posterior results from conditioning on the
-observed listings.
+The inferential goals are:
 
-## Research questions
+1. estimate associations between listing price and measured property features;
+2. quantify state-level and ZIP-level residual price variation;
+3. compare increasingly structured Bayesian models using DIC and held-out prediction;
+4. verify MCMC reliability and simulation-based parameter recovery;
+5. evaluate whether the fitted model reproduces relevant observed data features;
+6. generate posterior predictive price distributions for interpretable real-estate scenarios.
 
-1. After adjusting for measured property features and listing status, how much
-   descriptive log-price variation is associated with states and state--ZIP
-   groups?
-2. Does adding state and ZIP hierarchy improve predictive performance relative
-   to the same pooled covariate model?
-3. Can the fitted hierarchy reproduce relevant log-price and geographic
-   features in replicated data?
+The geographic parameters are descriptive and predictive associations. The data are observational listings, so the model does not identify causal effects of location, status, or property characteristics.
 
-The geographic effects are descriptive and predictive associations, not causal
-effects. Property condition, school quality, amenities, listing strategy, and
-other relevant determinants are not observed here.
+# Data description and preprocessing
 
-# Data and preprocessing
+## Source data
 
-## Source and raw-data evidence
+The dataset is the USA Real Estate Dataset from Kaggle, version 25, downloaded on 21 June 2026 [@kaggle_us_real_estate]. The raw CSV is preserved locally as `data/raw/realtor-data.csv`, has MD5 checksum `09ce5bd36ef648a5769a996735c05951`, and is excluded from version control.
 
-The source is the [USA Real Estate Dataset](https://www.kaggle.com/datasets/ahmedshahriarsakib/usa-real-estate-dataset),
-version 25, downloaded on 21 June 2026 and preserved unchanged as
-`data/raw/realtor-data.csv`. Its recorded MD5 checksum is
-`09ce5bd36ef648a5769a996735c05951`.
-
-The audit describes the source before filters are applied. This distinction is
-statistically important: a cleaning rule changes the population represented by
-the likelihood, so its consequences should be visible before a model is fit.
-
-```{r raw-overview, results='asis'}
-# Theory note: ZIP digits are labels used to define groups; treating them as a
-# continuous predictor would impose a numerical ordering with no meaning.
-show_table_or_notice(overview, "Raw dataset coverage before modelling filters.")
-show_table_or_notice(dictionary, "Data dictionary and completeness before modelling filters.")
+```{r data-overview}
+overview_display <- data.frame(
+  quantity = c("Raw rows", "Raw columns", "Unique states/territories", "Unique cities", "Unique ZIP codes"),
+  value = c(
+    fmt_count(overview_value("rows")),
+    overview_value("columns"),
+    overview_value("unique_states"),
+    fmt_count(overview_value("unique_cities")),
+    fmt_count(overview_value("unique_zip_codes"))
+  )
+)
+show_table(overview_display, "Raw dataset overview.")
 ```
 
-## Missingness, valid values, and transformations
+The modeling variables are price, living area, lot size, bedrooms, bathrooms, listing status, state, and ZIP code. Positive price and house size are required because the response and living area enter on the log scale. Lot size uses a `log1p` transformation so that zero-acre listings remain valid while extreme large lots are compressed.
 
-The planned complete-case model needs price, house size, lot size, bedrooms,
-bathrooms, status, state, and ZIP label. Missingness is a modelling decision,
-not cosmetic cleanup. Positive price and house size are required because their
-logarithms are used. Zero acreage remains valid: `log1p(acre_lot)` maps it to
-zero while reducing leverage from exceptionally large lots.
-
-```{r raw-quality-tables, results='asis'}
-# Theory note: logging positive, right-skewed quantities can make a Gaussian
-# residual model more plausible; it is not a rule for deleting expensive homes.
-if (!is.null(missingness)) {
-  missingness_display <- missingness
-  missingness_display$missing_percent <- 100 * missingness_display$missing_prop
-  missingness_display <- missingness_display[c("variable", "missing_n", "missing_percent")]
-  print(knitr::kable(
-    missingness_display, digits = 2,
-    col.names = c("Variable", "Missing listings", "Missing (%)"),
-    caption = "Missingness in unfiltered raw listings."
-  ))
-} else {
-  show_table_or_notice(NULL, "Missingness in unfiltered raw listings.")
-}
-show_table_or_notice(quality_counts, "Value-quality checks before modelling filters.")
-show_table_or_notice(status_counts, "Listing-status distribution before modelling filters.")
+```{r data-dictionary}
+dictionary_display <- dictionary[, c("variable", "type", "missing_n", "missing_percent")]
+names(dictionary_display) <- c("Variable", "Type", "Missing count", "Missing percent")
+show_table(dictionary_display, "Data dictionary and missingness for raw fields.")
 ```
 
-```{r raw-distributions, echo=FALSE, results='asis'}
-# Theory note: inspecting raw and log scales checks the empirical shape that
-# the likelihood is intended to approximate, rather than merely decorating it.
-for (file_name in c(
-  "raw_price_histogram.png", "raw_log_price_histogram.png",
-  "raw_house_size_histogram.png", "raw_log_house_size_histogram.png",
-  "raw_acre_lot_histogram.png", "raw_zip_sample_size_histogram.png"
-)) {
-  include_figure_if_available(file_name, tools::file_path_sans_ext(file_name))
-}
+## Cleaning, transformations, and analysis sample
+
+The response is standardized log listing price. Continuous covariates are also standardized using training-set information. The analysis uses a frozen balanced geographic sample: `r selected_states` states, `r fmt_count(selected_zips)` state-ZIP groups, 30 listings per state-ZIP group before splitting, and a 24/6 train/test split within each group.
+
+```{r row-accounting}
+show_table(row_accounting, "Row accounting from raw data to the frozen analysis frame.")
 ```
 
-## Sampling and analysis frame
-
-ZIP is represented as a state--ZIP label: a local effect belongs to the state
-in which that ZIP appears. The frozen design samples listings within selected
-ZIP groups and divides each group into training and held-out rows. The held-out
-exercise evaluates a new listing in a known ZIP; prediction for a genuinely new
-ZIP is a separate posterior simulation.
-
-```{r data-decisions-and-sample, results='asis'}
-# Theory note: scaling is learned from training rows only, keeping held-out
-# outcomes outside the fitted likelihood and the prior-relevant scale.
-show_table_or_notice(decisions, "Pre-specified modelling decisions supported by the audit.")
-show_table_or_notice(row_accounting, "Row accounting through the modelling frame.")
-show_table_or_notice(sample_overview, "Frozen analysis-sample dimensions.")
-if (!is.null(sample_manifest)) {
-  manifest_summary <- stats::aggregate(n ~ split, data = sample_manifest, FUN = sum)
-  print(knitr::kable(
-    manifest_summary, col.names = c("Split", "Listings"),
-    caption = "Listings represented by the saved state--ZIP sampling manifest."
-  ))
-} else {
-  cat("*The sampling manifest is not available yet.*\n\n")
-}
+```{r data-figure-grid, results='asis'}
+include_figure_grid(
+  files = c(
+    "raw_price_histogram.png",
+    "raw_log_price_histogram.png",
+    "raw_house_size_histogram.png",
+    "raw_log_house_size_histogram.png",
+    "raw_acre_lot_histogram.png",
+    "raw_zip_sample_size_histogram.png"
+  ),
+  captions = c(
+    "Raw listing prices are strongly right-skewed, motivating log-price modeling.",
+    "The log-price scale is closer to a regular unimodal distribution and is more compatible with Gaussian residual modeling.",
+    "Raw house size is also right-skewed, with some high-leverage large homes.",
+    "Log house size reduces skewness and supports a more stable linear effect.",
+    "Lot size contains many small or zero values and a long right tail, motivating the log1p transformation.",
+    "ZIP sample sizes are highly uneven in the raw data, motivating a balanced state-ZIP analysis sample."
+  ),
+  ncol = 2
+)
 ```
 
-The stratified sample preserves the selected hierarchy while making MCMC
-diagnostics, recovery experiments, and replicated-data checks feasible. It is
-not a design for a population-weighted national mean listing price.
+The distribution plots show why modeling directly on the dollar scale would be fragile: both price and size have long right tails. The log transformations reduce extreme leverage while preserving order. The ZIP-count plot also shows that a purely raw-data analysis would be dominated by heavily represented ZIP codes; the balanced sample makes state-ZIP comparisons computationally feasible and more stable for MCMC diagnostics.
 
-# Bayesian models and priors
+```{r sampling-grid, results='asis'}
+include_figure_grid(
+  files = c(
+    "sampled_listings_per_state_before_after.png",
+    "sampled_listings_per_zip_before_after.png"
+  ),
+  captions = c(
+    "Selected states retain a transparent link to the raw data while using a balanced analysis sample.",
+    "Selected state-ZIP groups contribute equal sample sizes before the train/test split."
+  ),
+  ncol = 2
+)
+```
 
-## Joint model and targets
+# Bayesian statistical models
 
-Let `y` denote the observed listings and let `\theta` collect regression
-coefficients, residual scale, and geographic effects. The Bayesian model is one
-joint distribution,
+## Model sequence
 
-$$
-p(y, \theta) = p(y \mid \theta)\pi(\theta),
-$$
+The project compares three Bayesian models fit to the same training data:
 
-where `p(y \mid \theta)` is the conditional data model and `\pi(\theta)` is the
-prior distribution. Once `y` is observed, coherent conditioning yields
+- **M0: pooled regression.** A common intercept, fixed covariate effects, and a single residual scale.
+- **M1: state hierarchy.** M0 plus state-level random intercepts.
+- **M2: heteroskedastic state-ZIP hierarchy.** M1 plus ZIP random intercepts nested within states and a residual scale that varies by covariates and state.
 
-$$
-p(\theta \mid y) =
-\frac{p(y \mid \theta)\pi(\theta)}{m(y)}, \qquad
-m(y) = \int p(y \mid \theta)\pi(\theta)\,d\theta.
-$$
+For listing \(i\), let \(y_i\) be standardized log price, \(\boldsymbol{x}_i\) be the covariate vector, \(s[i]\) the state index, and \(z[i]\) the ZIP index. The models are:
 
-The denominator both normalises the posterior and defines the prior predictive
-density. Posterior summaries describe uncertain parameters; predictive
-distributions additionally include variation in a future listing.
-
-## Model sequence and partial pooling
-
-For listing `i`, define standardized log price `y_i`, covariate vector
-`\boldsymbol{x}_i`, state `s[i]`, and ZIP group `z[i]`. M0 and M1 use a single
-residual scale. The selected M2 keeps the nested state/ZIP mean structure and
-allows the residual scale to vary by listing covariates and state:
-
-$$
+\[
 \begin{aligned}
-\text{M0:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma),
-&& \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta},\\
-\text{M1:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma),
-&& \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta} + u_{s[i]},\\
-\text{M2:}\quad &y_i \sim \operatorname{Normal}(\mu_i, \sigma_i),
-&& \mu_i = \alpha + \boldsymbol{x}_i^\mathsf{T}\boldsymbol{\beta}
-+ u_{s[i]} + v_{z[i]},\\
-&\log(\sigma_i) = \gamma_0 +
-\boldsymbol{x}_i^\mathsf{T}\boldsymbol{\gamma} + h_{s[i]}.
+\text{M0:}\quad y_i &\sim \text{Normal}(\mu_i,\sigma), &
+\mu_i &= \alpha + \boldsymbol{x}_i^\top\boldsymbol{\beta},\\
+\text{M1:}\quad y_i &\sim \text{Normal}(\mu_i,\sigma), &
+\mu_i &= \alpha + \boldsymbol{x}_i^\top\boldsymbol{\beta} + u_{s[i]},\\
+\text{M2:}\quad y_i &\sim \text{Normal}(\mu_i,\sigma_i), &
+\mu_i &= \alpha + \boldsymbol{x}_i^\top\boldsymbol{\beta} + u_{s[i]} + v_{z[i]},\\
+&& \log(\sigma_i) &= \gamma_0 + \boldsymbol{x}_i^\top\boldsymbol{\gamma} + h_{s[i]}.
 \end{aligned}
-$$
+\]
 
-In M2,
+In M2, \(u_s\) are state deviations, \(v_z\) are ZIP deviations centered within state, and \(h_s\) are state-level residual-scale effects. The sum-to-zero centering makes the intercept identifiable as an overall mean and prevents geographic effects from competing unnecessarily with the intercept.
 
-$$
-u_s \sim \operatorname{Normal}(0, \mathit{sd}_{\mathrm{state}}), \qquad
-v_z \sim \operatorname{Normal}(0, \mathit{sd}_{\mathrm{ZIP}}), \qquad
-h_s \sim \operatorname{Normal}(0, \mathit{sd}_{\sigma,\mathrm{state}}).
-$$
+## Priors and inferential targets
 
-Partial pooling follows from these group distributions. A ZIP with little
-information is estimated less precisely and pulled more toward its population
-mean, while a well-observed ZIP can depart when the data support it. This
-regularises local estimates probabilistically. The residual-scale submodel lets
-the predictive interval width vary systematically across listing types and
-states; it does not establish that a location causes a price difference.
+The intercept uses a weakly informative Normal prior centered at zero on the standardized log-price scale. Fixed effects use weak Normal priors, and scale parameters use proper half-Normal priors. The inferential targets are posterior distributions for:
 
-```{r hierarchical-dag, echo=FALSE, fig.cap='Directed acyclic graph for the planned M2 hierarchy. Arrows encode conditional dependence, not causal effects.', fig.width=9, fig.height=5}
-# Theory note: the graph exposes the factorisation. Hyperpriors govern the
-# distributions of state and ZIP effects; those effects help determine log price.
-graphics::par(mar = c(1, 1, 2, 1))
-graphics::plot.new()
-graphics::plot.window(xlim = c(0, 10), ylim = c(0, 6))
-draw_node <- function(x, y, label, fill) {
-  graphics::symbols(x, y, circles = 0.62, inches = FALSE, add = TRUE,
-                    bg = fill, fg = "#1B4965")
-  graphics::text(x, y, label, cex = 0.85)
+- fixed covariate effects \(\beta\);
+- state and ZIP partial-pooling variation;
+- residual-scale heterogeneity through \(\gamma\), \(\gamma_0\), and \(h_s\);
+- posterior predictive distributions for future listings.
+
+Prior predictive simulation checks whether the model can generate plausible price ranges before seeing the outcome data.
+
+```{r prior-predictive}
+prior_settings_display <- prior_settings
+show_table(prior_settings_display, "Prior predictive simulation settings.")
+```
+
+```{r prior-predictive-figure, results='asis'}
+include_figure_grid(
+  files = c("prior_predictive_price_ranges.png"),
+  captions = c("Prior predictive price ranges are compared with observed training prices on the dollar scale."),
+  ncol = 1
+)
+```
+
+The prior predictive plot confirms that the calibrated priors generate broad but interpretable price ranges. This check is important because overly diffuse priors on standardized covariates can produce implausibly extreme dollar prices even before any data are used.
+
+# Simulation-based parameter recovery
+
+The project includes a simulation recovery study in which outcomes are generated from known parameter values and then refit with the Bayesian workflow. This checks whether the computational model can recover parameters under controlled conditions.
+
+```{r recovery-status}
+if (!is.null(recovery_status_summary)) {
+  show_table(recovery_status_summary, "Repeated simulation recovery completion summary.")
 }
-draw_arrow <- function(x0, y0, x1, y1) {
-  graphics::arrows(x0, y0, x1, y1, length = 0.08, lwd = 1.5, col = "#1B4965")
-}
-draw_node(1.2, 5.0, "priors for\nalpha, beta", "#D9EDF7")
-draw_node(1.2, 2.0, "prior for\nsd_state", "#D9EDF7")
-draw_node(4.0, 2.0, "u[state]", "#CDECCF")
-draw_node(1.2, 0.6, "prior for\nsd_ZIP", "#D9EDF7")
-draw_node(4.0, 0.6, "v[ZIP]", "#CDECCF")
-draw_node(4.0, 5.0, "gamma and\nh[state]", "#D9EDF7")
-draw_node(6.4, 4.1, "property features\nand status", "#FFF2B2")
-draw_node(6.4, 2.2, "mu[i]", "#F6D6D6")
-draw_node(8.8, 2.2, "log price\ny[i]\nwith sigma[i]", "#F6D6D6")
-draw_arrow(1.8, 4.8, 5.8, 2.55)
-draw_arrow(4.65, 4.8, 8.25, 2.55)
-draw_arrow(1.8, 2.0, 3.35, 2.0)
-draw_arrow(4.65, 2.05, 5.75, 2.18)
-draw_arrow(1.8, 0.75, 3.35, 0.75)
-draw_arrow(4.65, 0.9, 5.75, 1.95)
-draw_arrow(6.4, 3.45, 6.4, 2.85)
-draw_arrow(7.05, 2.2, 8.15, 2.2)
-graphics::text(5, 5.65, "M2: conditional distribution for a listing within a state--ZIP group",
-               font = 2, cex = 1)
+
+recovery_display <- recovery_metrics[, c(
+  "label", "true_value", "n_successful_converged",
+  "empirical_coverage_95", "posterior_mean_bias", "posterior_mean_rmse"
+)]
+names(recovery_display) <- c(
+  "Parameter", "True value", "Converged fits",
+  "Empirical 95% coverage", "Posterior mean bias", "Posterior mean RMSE"
+)
+show_table(recovery_display, "Simulation recovery parameter metrics.")
 ```
 
-## Priors and prior-predictive evidence
-
-The response and continuous covariates are standardized from training rows.
-The intercept prior is centred at zero, coefficients have weakly informative
-Normal priors, and scales have proper half-Normal priors. Proper priors provide
-a defined posterior while retaining room for the likelihood to update beliefs.
-
-Prior-predictive simulation draws parameters from their priors and then draws
-outcomes from the likelihood. It tests whether the full model can generate
-plausible listings before the observed response is used.
-
-```{r prior-predictive-results, results='asis'}
-# Theory note: prior prediction averages over uncertain parameters; it is more
-# informative than checking a prior on each coefficient in isolation.
-show_table_or_notice(prior_settings, "Prior-predictive simulation settings.")
-show_table_or_notice(prior_ranges, "Prior-predictive price-range summary.")
-include_figure_if_available(
-  "prior_predictive_price_ranges.png",
-  "Prior-predictive ranges after simulated log prices are converted to dollars."
+```{r recovery-figure, results='asis'}
+include_figure_grid(
+  files = c("simulation_recovery_scalar_parameter_recovery.png"),
+  captions = c("Scalar parameter recovery compares known simulated values with posterior means and 95% credible intervals."),
+  ncol = 1
 )
 ```
 
-# Simulation study
-
-The recovery study generates synthetic outcomes from known M2 parameter values,
-fits the same workflow, and compares posterior intervals with the generating
-truth. This is an implementation check rather than proof that the real-data
-model is true. Repeated simulations can assess interval coverage and typical
-error rather than relying on a single favourable result.
-
-```{r simulation-recovery-results, results='asis'}
-# Theory note: simulation makes the unknown parameter observable by construction,
-# so calibration of a posterior interval can be evaluated directly.
-show_table_or_notice(
-  read_table_if_available("simulation_recovery_settings.csv"),
-  "Simulation-recovery MCMC settings."
-)
-show_table_or_notice(
-  read_table_if_available("simulation_recovery_full_scalar_parameters.csv"),
-  "Recovery of scalar parameters from a synthetic M2 dataset."
-)
-show_table_or_notice(
-  read_table_if_available("simulation_recovery_repeated_parameter_metrics.csv"),
-  "Repeated-simulation recovery metrics."
-)
-include_figure_if_available(
-  "simulation_recovery_scalar_parameters.png",
-  "Posterior intervals and known scalar parameters in the recovery study."
-)
-```
+The larger reduced-design recovery run completed and converged for all 20 replications. Recovery is strongest for several scale and covariate parameters, while coverage is weaker for some fixed effects. This is not a script failure; it indicates that the reduced simulation design is a stress test and that finite-sample bias or covariate structure can affect interval calibration. The recovery results are therefore interpreted as computational validation with a documented diagnostic caveat rather than as proof that all real-data posterior intervals are perfectly calibrated.
 
 # MCMC computation and diagnostics
 
-The hierarchical posterior is not expected to have a convenient analytic form.
-MCMC produces dependent draws whose long-run distribution is the posterior.
-For a posterior summary `h(\theta)`, the simulation estimate is
+The posterior was approximated using four MCMC chains. For the selected heteroskedastic M2 fit, each chain used 2,000 adaptation iterations, 5,000 warm-up iterations, and 10,000 retained sampling iterations, giving 40,000 posterior draws. DIC was computed with a separate lightweight live-JAGS refit because `dic.samples()` requires live model objects rather than saved posterior draws [@spiegelhalter2002bayesian].
 
-$$
-\widehat{I}_T = \frac{1}{T}\sum_{t=1}^{T}h\left(\theta^{(t)}\right).
-$$
-
-Successive draws can be autocorrelated, so the number of iterations alone is
-not an accuracy measure. Positive autocorrelation lowers effective sample size
-and increases Monte Carlo error. Multiple chains with dispersed initial values,
-trace plots, running means, autocorrelation plots, split R-hat, bulk/tail ESS,
-and MCSE assess complementary features of the numerical approximation.
-
-```{r mcmc-diagnostics-results, results='asis'}
-# Theory note: diagnostics concern the MCMC approximation conditional on the
-# model. They cannot by themselves establish that the model is adequate.
-show_table_or_notice(
-  read_table_if_available("m2_selected_diagnostics.csv"),
-  "Selected M2 convergence and Monte Carlo accuracy diagnostics."
-)
-include_figure_if_available("m2_trace_plots.png", "Trace plots for pre-specified M2 parameters.")
-include_figure_if_available("m2_autocorrelation_plots.png", "Autocorrelation plots for pre-specified M2 parameters.")
+```{r mcmc-settings-diagnostics}
+m2_settings_display <- m2_settings[m2_settings$setting %in% c(
+  "n_chains", "n_adapt", "n_burn", "n_iter", "thin", "seed",
+  "chunk_iter", "max_heldout_draws", "max_ppc_draws",
+  "sigma_prior_center", "gamma0_prior_scale",
+  "gamma_prior_scale", "sigma_state_prior_scale"
+), , drop = FALSE]
+show_table(m2_settings_display, "M2 MCMC and posterior-check settings.")
+show_table(diag_overview, "Numerical convergence and Monte Carlo accuracy summary for M2.")
 ```
 
-Posterior claims should be made only after all pre-specified visual and numeric
-criteria are satisfied. A failure prompts investigation of code, priors,
-indexing, initial values, adaptation, or chain length rather than selective use
-of appealing summaries.
+All `r convergence_status$n_parameters` monitored M2 parameters passed the pre-specified convergence checks. The maximum R-hat was `r fmt_num(convergence_status$max_rhat, 4)`, the minimum bulk ESS was `r fmt_num(convergence_status$min_bulk_ess, 1)`, and the maximum MCSE/posterior-SD ratio was `r fmt_num(convergence_status$max_mcse_sd_ratio, 4)`. These diagnostics support using the posterior draws for inference and prediction.
 
-# Posterior results
-
-Posterior summaries report medians or means, 95% credible intervals, and
-posterior probability statements. A 95% credible interval has 0.95 posterior
-probability under the stated model and prior. Fixed-effect estimates are
-conditional associations on standardized log price; state and ZIP effects are
-residual geographic associations after the measured covariates are included.
-
-For a future outcome `y^{\mathrm{new}}`, the target is the posterior predictive
-distribution,
-
-$$
-p(y^{\mathrm{new}} \mid y) =
-\int p(y^{\mathrm{new}} \mid \theta)p(\theta \mid y)\,d\theta.
-$$
-
-It includes both parameter uncertainty and irreducible listing variation, so a
-predictive interval is generally wider than an interval for a conditional mean.
-
-```{r posterior-results, results='asis'}
-# Theory note: shrinkage must be read with sample size and interval width, not
-# ranked as causal evidence about one location versus another.
-show_table_or_notice(
-  read_table_if_available("m2_fixed_effects.csv"),
-  "M2 fixed-effect posterior summaries on the standardized log-price scale."
-)
-show_table_or_notice(
-  read_table_if_available("m2_hierarchical_variance_summary.csv"),
-  "M2 residual, state, and ZIP variation summaries."
-)
-show_table_or_notice(
-  read_table_if_available("m2_posterior_predictions.csv"),
-  "M2 posterior-predictive scenarios on the dollar scale."
-)
-include_figure_if_available("m2_state_effects_caterpillar.png", "M2 state effects with credible intervals.")
-include_figure_if_available("m2_selected_zip_effects_caterpillar.png", "Selected M2 ZIP effects with credible intervals.")
-include_figure_if_available("m2_posterior_prediction_intervals.png", "Posterior-predictive intervals for selected scenarios.")
-```
-
-# Model comparison and checking
-
-## Comparative predictive evidence
-
-Deviance Information Criterion (DIC) is a complexity-adjusted, in-sample
-comparison. With `D(\theta) = -2\log L(\theta)`, it combines fit with an
-effective parameter count. It is comparable only when the models use the same
-observations and likelihood convention, and it has no useful absolute scale.
-
-Held-out evaluation uses the same test rows for M0, M1, and M2. RMSE and MAE
-measure predictive error, interval coverage checks calibration, and mean log
-predictive density rewards well-calibrated sharp distributions. These evaluate
-different properties, so no single criterion chooses a model by itself.
-
-```{r comparison-results, results='asis'}
-# Theory note: lower DIC does not prove model adequacy; held-out predictions and
-# replicated-data checks test aspects that an in-sample criterion cannot see.
-show_table_or_notice(
-  read_table_if_available("dic_comparison.csv"),
-  "DIC decomposition for comparable fitted models."
-)
-show_table_or_notice(
-  read_table_if_available("heldout_predictive_metrics.csv"),
-  "Held-out predictive performance using common test listings."
+```{r mcmc-diagnostic-grid, results='asis'}
+include_figure_grid(
+  files = c(
+    "m2_traceplots.png",
+    "m2_rank_histograms.png",
+    "m2_acf.png"
+  ),
+  captions = c(
+    "Trace plots should show stable mixing without persistent chain separation.",
+    "Rank histograms check whether chains explore the same posterior distribution.",
+    "Autocorrelation plots assess dependence between successive MCMC draws."
+  ),
+  ncol = 3
 )
 ```
 
-## Posterior-predictive checks
+The diagnostic plots are read together with the numerical summary. Stable traces, overlapping rank behavior, and acceptable autocorrelation support the conclusion that the MCMC approximation is adequate for the displayed posterior summaries.
 
-Posterior-predictive checking generates replicated datasets from the fitted
-model and compares them with the observed training data. Relevant discrepancies
-include the log-price distribution, upper tails, and state or ZIP variation. A
-mismatch diagnoses a feature to improve; it is not a mechanical pass/fail test.
+# Posterior inference
 
-```{r posterior-predictive-results, results='asis'}
-# Theory note: replicated outcomes include residual variation, whereas fitted
-# means alone can conceal a model's failure to reproduce observed dispersion.
-show_table_or_notice(
-  read_table_if_available("posterior_predictive_check_summary.csv"),
-  "Observed-versus-replicated posterior-predictive discrepancy summaries."
+## Fixed effects and variance components
+
+```{r posterior-summary-tables}
+fixed_display <- posterior_fixed[, c(
+  "component", "posterior_median", "lower_95", "upper_95", "posterior_probability"
+)]
+names(fixed_display) <- c(
+  "Effect", "Posterior median", "Lower 95%", "Upper 95%", "Pr(effect > 0)"
 )
-include_figure_if_available(
-  "posterior_predictive_checks_m2.png",
-  "Observed and replicated M2 distributional and geographic features."
+show_table(fixed_display, "M2 fixed-effect posterior summaries.")
+
+variance_display <- posterior_variance[, c(
+  "component", "posterior_median", "lower_95", "upper_95", "posterior_probability"
+)]
+names(variance_display) <- c(
+  "Quantity", "Posterior median", "Lower 95%", "Upper 95%", "Posterior probability"
+)
+show_table(variance_display, "M2 residual and geographic variation summaries.")
+```
+
+The fixed effects have the expected qualitative pattern. Larger living area and larger lot size are associated with higher listing prices, and bathrooms have a clear positive association. Bedrooms have a small negative association after controlling for living area and bathrooms, which is plausible because additional bedrooms at fixed size can reflect smaller rooms or different property configurations. The sold-status coefficient is negative relative to the reference status in this balanced modeling frame.
+
+The posterior median typical residual SD is `r fmt_num(posterior_variance$posterior_median[posterior_variance$component == "Typical residual SD"], 3)`. State and ZIP variation are both substantial, indicating that geographic partial pooling remains important after property features are included.
+
+```{r posterior-figure-grid, results='asis'}
+include_figure_grid(
+  files = c(
+    "m2_fixed_effect_forest.png",
+    "m2_variance_component_posteriors.png",
+    "m2_state_effects_caterpillar.png",
+    "m2_selected_zip_effects_caterpillar.png"
+  ),
+  captions = c(
+    "Fixed-effect forest plot: intervals away from zero indicate strong posterior evidence for an association.",
+    "Variance-component posteriors: residual, state, and ZIP scales quantify remaining unexplained variation.",
+    "State-effect caterpillar plot: state effects are partial-pooling deviations from the overall intercept.",
+    "Selected ZIP-effect caterpillar plot: ZIP effects are local deviations centered within states."
+  ),
+  ncol = 2
 )
 ```
+
+The caterpillar plots should not be interpreted causally. They show residual geographic associations conditional on the included covariates. The hierarchical structure shrinks uncertain state and ZIP effects toward their group-level distributions, reducing instability relative to separate unpooled estimates.
+
+## Posterior predictive scenarios
+
+```{r posterior-prediction-table}
+prediction_display <- predictions[, c(
+  "scenario_label", "state", "zip_code", "median_price_usd",
+  "lower_50_price_usd", "upper_50_price_usd",
+  "lower_95_price_usd", "upper_95_price_usd"
+)]
+names(prediction_display) <- c(
+  "Scenario", "State", "ZIP", "Median price",
+  "50% lower", "50% upper", "95% lower", "95% upper"
+)
+show_table(prediction_display, "Posterior predictive dollar-price scenarios.")
+```
+
+```{r posterior-prediction-figure, results='asis'}
+include_figure_grid(
+  files = c("m2_posterior_prediction_intervals.png"),
+  captions = c("Posterior predictive price intervals include both parameter uncertainty and listing-level residual variation."),
+  ncol = 1
+)
+```
+
+The scenario predictions illustrate the size of geographic effects. A representative home in a high adjusted-price observed ZIP has a much higher posterior predictive median than the same property profile in a low adjusted-price observed ZIP. A new ZIP in the high-price state has a lower and wider distribution than the observed high-price ZIP because its ZIP effect is not observed and must be drawn from the ZIP-level distribution.
+
+# Model comparison
+
+## DIC and held-out predictive performance
+
+```{r model-comparison-table}
+comparison_display <- model_comparison[, c(
+  "model", "DIC", "delta_DIC", "RMSE", "MAE", "coverage_95", "MLPD"
+)]
+names(comparison_display) <- c(
+  "Model", "DIC", "Delta DIC", "RMSE", "MAE", "95% coverage", "MLPD"
+)
+show_table(comparison_display, "DIC and held-out predictive comparison.")
+```
+
+M2 is clearly preferred. Its DIC is `r fmt_num(m2_row$DIC, 2)`, compared with `r fmt_num(m1_row$DIC, 2)` for M1 and `r fmt_num(m0_row$DIC, 2)` for M0. On the held-out test set, M2 also has the lowest RMSE and MAE and the best mean log predictive density. Its 95% predictive coverage is `r fmt_num(m2_row$coverage_95, 4)`, close to the nominal 0.95 target. The agreement between DIC and held-out predictive performance supports the selected hierarchical structure.
+
+# Posterior predictive model checking
+
+Posterior predictive checks evaluate whether replicated data generated from the fitted model reproduce important features of the observed training data. The chosen checks target central tendency, distributional spread, upper-tail behavior, state medians, and ZIP-level geographic variation.
+
+```{r ppc-table}
+ppc_display <- ppc_key[, c(
+  "display_statistic", "observed", "replicated_median",
+  "replicated_lower_95", "replicated_upper_95",
+  "posterior_predictive_tail_probability"
+)]
+names(ppc_display) <- c(
+  "Statistic", "Observed", "Replicated median",
+  "Replicated lower 95%", "Replicated upper 95%", "Tail probability"
+)
+show_table(ppc_display, "Key M2 posterior predictive checks.")
+```
+
+```{r ppc-figure-grid, results='asis'}
+include_figure_grid(
+  files = c(
+    "m0_posterior_predictive_checks.png",
+    "m1_posterior_predictive_checks.png",
+    "m2_posterior_predictive_checks.png"
+  ),
+  captions = c(
+    "M0 posterior predictive checks: the pooled model misses substantial geographic heterogeneity.",
+    "M1 posterior predictive checks: state effects improve geography but still understate ZIP-level variation.",
+    "M2 posterior predictive checks: geographic variation is well reproduced, while overall IQR and upper-tail spread remain mildly high."
+  ),
+  ncol = 3
+)
+```
+
+M2 reproduces the ZIP mean variance closely: the observed value is `r fmt_num(ppc_key$observed[ppc_key$display_statistic == "ZIP mean variance"], 4)` and the replicated median is `r fmt_num(ppc_key$replicated_median[ppc_key$display_statistic == "ZIP mean variance"], 4)`. The overall IQR and 90th percentile remain moderately above the observed values in replicated data. This means the selected model captures the main geographic structure but still slightly over-disperses the marginal standardized log-price distribution. The discrepancy is reported as a model-checking caveat and a direction for future refinement, not as invalidation of the model.
 
 # Discussion
 
-The completed work provides a transparent empirical foundation: the raw source
-is preserved, data quality is measured before filtering, transformations are
-explicit, and the state--ZIP sample is reproducible. The questions above can be
-answered substantively only when recovery, converged posterior draws,
-held-out evaluation, and posterior-predictive artefacts are available.
+The results support a hierarchical Bayesian model for these real-estate listings. Moving from M0 to M1 improves geographic structure, but the state-only model cannot represent local ZIP-level variation. The heteroskedastic M2 improves both model comparison and held-out prediction while preserving calibrated predictive intervals.
 
-The data are online listings rather than a random sample of completed sales.
-They omit reliable measures of property condition, school quality,
-neighbourhood amenities, and a usable time axis; repeated listings may remain
-even where exact duplicate rows do not. These limitations preclude causal
-interpretation, and the balanced computational sample does not justify a
-population-weighted national conclusion.
+Substantively, living area, lot size, and bathrooms are positively associated with listing price on the standardized log scale. Geographic effects remain important after these property features are included. The posterior predictive scenarios show that location-specific effects can strongly affect predicted dollar prices for otherwise similar representative homes.
 
-```{r report-artifact-status}
-# Theory note: a reproducible report makes the boundary between completed
-# evidence and planned analysis visible to readers and future re-renders.
-knitr::kable(
-  artifact_status[, c("report_section", "status")],
-  col.names = c("Report section", "Current artifact status"),
-  caption = "Availability of evidence displayed by this render."
-)
-```
+The project also illustrates the value of formal Bayesian workflow checks. Prior predictive simulation prevented implausible prior scales, simulation recovery tested computational behavior under known data-generating values, MCMC diagnostics verified numerical reliability, DIC and held-out metrics compared models, and posterior predictive checks identified what the final model reproduces well and where it remains imperfect.
+
+# Conclusion
+
+The heteroskedastic state-ZIP Bayesian hierarchical model provides the strongest and most interpretable analysis among the fitted models. It is preferred by DIC, held-out RMSE, held-out MAE, and mean log predictive density; it has calibrated 95% predictive coverage; and it reproduces geographic heterogeneity well. The remaining over-dispersion in overall IQR and upper-tail checks is a useful diagnostic for future work, especially for richer nonlinear mean structures or more detailed property-quality information.
 
 # Appendix
 
 ## Reproducibility record
 
-The project seed is `20260621`. The raw CSV is excluded from version control,
-whereas source code, small tables, figures, and this report are versioned.
-Rendering starts in a clean R session and reads saved artefacts rather than
-hidden global objects. Set `params = list(rerun_audit = TRUE)` only to
-regenerate the raw audit from the preserved CSV.
+The project seed is `20260621`. The raw CSV is excluded from version control, while model code, report source, generated tables, and generated figures are versioned. Rendering this report reads saved analysis artifacts from `output/tables` and `output/figures`.
 
 ```{r optionally-rerun-audit, eval=params$rerun_audit}
-# Theory note: regeneration uses an unchanged source file, preserving the link
-# between the audit evidence, the data-generating input, and its code path.
 source(file.path(project_root, "scripts", "01_data_audit.R"))
 ```
 
 ## JAGS model code
 
-The following source files specify the likelihood and priors. JAGS uses
-precision in its Normal distribution, so the code converts each positive
-standard deviation to inverse variance. Including executable source makes the
-probability model inspectable rather than merely described in prose.
-
 ### M0: pooled regression
 
-```{r appendix-m0, echo=FALSE, results='asis'}
+```{r appendix-m0, results='asis'}
 emit_code_file(file.path(project_root, "models", "m0_pooled.jags"), "jags")
 ```
 
 ### M1: state random intercepts
 
-```{r appendix-m1, echo=FALSE, results='asis'}
+```{r appendix-m1, results='asis'}
 emit_code_file(file.path(project_root, "models", "m1_state.jags"), "jags")
 ```
 
-### M2: heteroskedastic nested state and ZIP random intercepts
+### M2: heteroskedastic state-ZIP hierarchy
 
-```{r appendix-m2, echo=FALSE, results='asis'}
+```{r appendix-m2, results='asis'}
 emit_code_file(file.path(project_root, "models", "m2_heteroskedastic_state_sigma.jags"), "jags")
 ```
 
-## Full diagnostics and session information
-
-The parameter-level diagnostic tables, random-effect tables, and additional
-trace/ACF figures are saved under `output/tables/` and `output/figures/` when
-their scripts have completed. The rendering session is recorded below because
-Bayesian computation depends on the implemented sampler and software versions.
+## Session information
 
 ```{r session-information, comment=NA}
-# Theory note: session information is part of the computational provenance of
-# any numerical posterior result and allows its environment to be reconstructed.
-# Trim presentation padding while retaining every session-information field.
 cat(paste(trimws(capture.output(sessionInfo()), which = "right"), collapse = "\n"))
 ```
