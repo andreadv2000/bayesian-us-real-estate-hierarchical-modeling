@@ -4,7 +4,7 @@ MCMC setting,Adaptation iterations per chain,2000,NA,NA,NA,NA,NA
 MCMC setting,Warm-up iterations per chain,5000,NA,NA,NA,NA,NA
 MCMC setting,Sampling iterations per chain,10000,NA,NA,NA,NA,NA
 MCMC setting,Thinning,1,NA,NA,NA,NA,NA
-MCMC setting,Retained posterior draws,80000,NA,NA,NA,NA,NA
+MCMC setting,Retained posterior draws,40000,NA,NA,NA,NA,NA
 Convergence diagnostic,alpha,Posterior parameter,0.9999872913202216,26407.147880978675,47705.128467853625,3.5655841951271624e-5,TRUE
 Convergence diagnostic,beta[1],Posterior parameter,1.0000896001523552,24578.09534598338,41067.143370383004,4.1986959156348104e-5,TRUE
 Convergence diagnostic,beta[2],Posterior parameter,1.0000185970359612,42466.930491536914,63226.17073030754,2.478241220216539e-5,TRUE

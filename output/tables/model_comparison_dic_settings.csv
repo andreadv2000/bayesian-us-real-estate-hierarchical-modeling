@@ -5,4 +5,8 @@ n_adapt,2000
 n_burn,5000
 n_dic_iter,5000
 seed,20260623
+m2_sigma_prior_center,0.5
+m2_gamma0_prior_scale,0.5
+m2_gamma_prior_scale,0.2
+m2_sigma_state_prior_scale,0.2
 analysis_objects_path,C:/Users/andre/Desktop/Final-FSLII/data/processed/analysis_objects.rds
