@@ -1,34 +1,20 @@
-# Selected M2 for caveat-fix branch
+# Why the heteroskedastic M2 was selected
 
-This branch keeps the original production M2 as the baseline/reference model and selects the heteroskedastic state/ZIP model as the branch's official M2 candidate.
+The original state–ZIP model used a constant residual scale. Its posterior predictive simulations had a wider interquartile range and a higher 90th percentile than the observed standardized log prices. The selected variant keeps the state and ZIP intercepts and lets residual variation depend on the property covariates and state.
 
-Selected model:
+## Comparison with the earlier state–ZIP model
 
-- Model name: `M2_heteroskedastic_xall_state`
-- JAGS model file: `models/m2_heteroskedastic_state_sigma.jags`
-- Main fitting script: `scripts/05_fit_models.R`
-- Standalone fit/check script: `scripts/17_m2_heteroskedastic_experiment.R`
-- Draws: `output/mcmc/m2_heteroskedastic_xall_state_draws.rds`
-- Posterior summary: `output/tables/m2_heteroskedastic_xall_state_posterior_summary.csv`
-- Held-out metrics: `output/tables/m2_heteroskedastic_xall_state_heldout_predictive_metrics.csv`
-- PPC summary: `output/tables/m2_heteroskedastic_xall_state_posterior_predictive_check_summary.csv`
+The standalone selection run used 3,600 held-out listings and 2,000 predictive draws. This comparison is between the two M2 variants. For the final comparison against the pooled and state-only models, see the [project README](../README.md#results) and [report table](../output/tables/report_dic_heldout_model_comparison.csv).
 
-Selection rationale:
+| M2 variant | Held-out RMSE ↓ | Held-out MAE ↓ | Mean log predictive density ↑ | 95% interval coverage |
+| --- | ---: | ---: | ---: | ---: |
+| Earlier constant residual scale | 0.4268 | 0.2870 | −0.6044 | 97.1% |
+| Selected varying residual scale | 0.4243 | 0.2826 | −0.4907 | 95.5% |
 
-- The full run converged for all monitored parameters: 665/665.
-- The selected model improved held-out RMSE, MAE, and MLPD relative to the baseline M2.
-- 95% predictive coverage stayed calibrated: 0.955 versus 0.971 for baseline M2.
-- The PPC over-dispersion caveat improved: replicated median IQR moved from 1.290 under baseline M2 to 1.215 under the heteroskedastic M2, closer to the observed 1.109.
-- The replicated q90 moved from 1.263 under baseline M2 to 1.217 under the heteroskedastic M2, closer to the observed 1.127.
-- ZIP-level geographic heterogeneity remained close to the observed value.
+The selected fit passed the convergence criteria for 665 of 665 monitored parameters. Its replicated median IQR moved from 1.290 to 1.215, toward the observed 1.109. Its replicated 90th percentile moved from 1.263 to 1.217, toward the observed 1.127. The remaining gaps show where the selected model still overstates spread and the upper tail.
 
-Important limitation:
+## Sources
 
-The heteroskedastic M2 improves, but does not completely eliminate, the remaining upper-tail/IQR over-dispersion. In a report, describe this as an improved caveat rather than a fully solved issue.
-
-Pipeline status:
-
-- `scripts/05_fit_models.R` treats the heteroskedastic state/ZIP model as M2 on this branch.
-- `scripts/06_diagnostics.R`, `scripts/07_model_comparison.R`, `scripts/08_posterior_predictive_checks.R`, `scripts/09_make_figures_tables.R`, and `scripts/10_posterior_predictions.R` read the heteroskedastic M2 draw file by default.
-- `scripts/07_lightweight_dic.R` computes DIC for M0, M1, and the heteroskedastic M2.
-- `scripts/11_sensitivity_analyses.R` is retained as a legacy normal-residual M2 prior-sensitivity check, not as the official branch M2.
+- [Selected JAGS model](../models/m2_heteroskedastic_state_sigma.jags) and [earlier model](../models/m2_state_zip.jags)
+- [Production fitting script](../scripts/05_fit_models.R) and [standalone selection experiment](../scripts/17_m2_heteroskedastic_experiment.R)
+- [Held-out comparison](../output/tables/selected_m2_heldout_comparison.csv), [posterior predictive checks](../output/tables/selected_m2_ppc_comparison.csv), and [convergence summary](../output/tables/selected_m2_convergence_status.csv)

@@ -1,110 +1,54 @@
-# Bayesian Hierarchical Modeling of U.S. Real-Estate Listing Prices
+# Bayesian Modeling of U.S. Real Estate Listing Prices
 
-This project analyzes U.S. residential real-estate listing prices with fully Bayesian hierarchical regression models. The analysis estimates how property characteristics and geographic structure relate to listing prices while accounting for partial pooling across states and ZIP codes.
+How much does location improve listing-price predictions after accounting for property characteristics? This project compares three Bayesian regression models using **18,000 residential listings across 25 states and 600 state–ZIP groups**. The selected R/JAGS model reduced held-out RMSE by **44%** versus pooled regression, with **95.4% empirical coverage** for its 95% predictive intervals.
 
-The final model is a heteroskedastic state/ZIP hierarchical model fitted with MCMC in R/JAGS. It models standardized log listing price with fixed property effects, state and ZIP random intercepts, and a residual scale that varies by listing covariates and state.
+[Download the full HTML report](report/report.html) and open it in a browser, or inspect the [results table](output/tables/report_dic_heldout_model_comparison.csv) and [selected model](models/m2_heteroskedastic_state_sigma.jags) directly on GitHub.
 
-## Data
+## Results
 
-The analysis uses the USA Real Estate Dataset from Kaggle:
+All models use the same frozen split: 14,400 training listings and 3,600 held-out listings. RMSE and MAE are measured on the standardized log listing-price scale. Coverage is the share of held-out observations inside the nominal 95% posterior predictive intervals.
 
-- Dataset: [USA Real Estate Dataset](https://www.kaggle.com/datasets/ahmedshahriarsakib/usa-real-estate-dataset)
-- Kaggle dataset version: 25
-- Download date: 2026-06-21
-- Raw CSV path expected locally: `data/raw/realtor-data.csv`
-- Raw CSV size: 178,858,272 bytes
-- MD5 checksum: `09ce5bd36ef648a5769a996735c05951`
-- Raw columns: `brokered_by`, `status`, `price`, `bed`, `bath`, `acre_lot`, `street`, `city`, `state`, `zip_code`, `house_size`, `prev_sold_date`
+| Model | Held-out RMSE ↓ | Held-out MAE ↓ | 95% interval coverage |
+| --- | ---: | ---: | ---: |
+| M0 · Pooled Bayesian regression | 0.7623 | 0.5574 | 95.2% |
+| M1 · State random intercepts | 0.5970 | 0.4288 | 95.7% |
+| **M2 · State and ZIP random intercepts, varying residual variance** | **0.4241** | **0.2825** | **95.4%** |
 
-The raw data file is intentionally excluded from version control. Reproducing the full analysis requires downloading the same dataset version and placing the CSV at the path above.
+M2 also had the best mean log predictive density and the lowest in-sample DIC. Both measures are in the [full comparison table](output/tables/report_dic_heldout_model_comparison.csv).
 
-## Modeling approach
+![Predicted listing-price medians and 50% and 95% intervals for a representative home in three ZIP-code scenarios](output/figures/m2_posterior_prediction_intervals.png)
 
-The response variable is standardized log listing price. The core predictors are:
+The chart shows example predictions in dollars for a representative home across three geographic scenarios. The held-out metrics above evaluate listings in state–ZIP groups the model saw during training.
 
-- log living area
-- log lot size
-- bedrooms
-- bathrooms
-- listing status
+## Approach
 
-Three Bayesian regression models are compared:
+1. **Audit and sample.** Clean the [2.23 million source rows](output/tables/report_cleaning_sampling_row_accounting.csv), then build a balanced sample with 30 listings per state–ZIP group. Each group contributes 24 training listings and six held-out listings.
+2. **Fit a model ladder.** Predict log listing price using living area, lot size, bedrooms, bathrooms, and listing status. Add state effects in M1, then nested ZIP effects and residual variance that depends on property characteristics and state in M2. Use the training set for standardization.
+3. **Check the fit and predictions.** Assess the modeling assumptions with prior predictive checks and simulation recovery. Review four MCMC chains (40,000 retained posterior draws for M2), compare models on the same held-out listings, and use posterior predictive checks to see where the selected model misses.
 
-| Model | Description |
-|---|---|
-| M0 | Pooled Bayesian regression |
-| M1 | Bayesian regression with state-level random intercepts |
-| M2 | Heteroskedastic hierarchical regression with state and ZIP random intercepts |
+**Scope.** The split measures performance within the sampled markets. A geographic or temporal holdout would be needed to assess performance in new markets or future periods. The balanced sample supports comparison across the selected markets, and the target is the asking price. M2 captures much of the ZIP-level variation, but its simulated listing-price distribution still has a wider interquartile range and a higher 90th percentile than observed. See the [posterior predictive checks](output/figures/m2_posterior_predictive_checks.png) and [underlying statistics](output/tables/report_posterior_predictive_test_statistics.csv).
 
-The selected M2 model uses the following structure:
+## Where to look in the code
 
-- state effects are centered deviations from the national intercept;
-- ZIP effects are centered within state;
-- residual standard deviation varies with covariates and state-level residual-scale effects;
-- all models use the same frozen training/test split for comparison.
+| Resource | What it shows |
+| --- | --- |
+| [Sampling script](scripts/02_make_sample.R) and [JAGS inputs](scripts/03_prepare_jags_data.R) | Balanced sampling, frozen split, and training-based scaling |
+| [M2 specification](models/m2_heteroskedastic_state_sigma.jags) and [fitting script](scripts/05_fit_models.R) | Nested effects, varying residual scale, and MCMC |
+| [Model comparison](scripts/07_model_comparison.R) and [prediction intervals](scripts/10_posterior_predictions.R) | Held-out scoring and uncertainty for representative listings |
+| [Model-selection note](docs/selected_m2.md) and [report source](report/report.Rmd) | How the earlier M2 variant was revised and reported |
 
-## Main results
+## Reproduce the analysis
 
-The heteroskedastic M2 is the strongest model by both in-sample DIC and held-out predictive performance.
+The report, [tables](output/tables), and [figures](output/figures) are already in the repository. To refit the models, use R 4.5.2 (the version in [renv.lock](renv.lock)) and a system installation of JAGS 4.x. Restore the R packages with `Rscript -e 'renv::restore(prompt = FALSE)'` from the repository root.
 
-| Model | DIC | RMSE | MAE | 95% coverage | MLPD |
-|---|---:|---:|---:|---:|---:|
-| M2: heteroskedastic state + ZIP | 15,333.34 | 0.4241 | 0.2825 | 0.9536 | -0.4905 |
-| M1: state | 29,452.74 | 0.5970 | 0.4288 | 0.9572 | -0.9155 |
-| M0: pooled | 35,023.39 | 0.7623 | 0.5574 | 0.9522 | -1.1507 |
+Download version 25 of the [USA Real Estate Dataset](https://www.kaggle.com/datasets/ahmedshahriarsakib/usa-real-estate-dataset) and place the CSV at `data/raw/realtor-data.csv`. The original file is 178,858,272 bytes and has MD5 `09ce5bd36ef648a5769a996735c05951`. The upstream dataset terms apply to the CSV.
 
-Selected posterior summaries for M2:
+<details>
+<summary>Commands for a fresh fit and optional report render</summary>
 
-| Quantity | Posterior median | 95% credible interval |
-|---|---:|---:|
-| log living area effect | 0.3227 | [0.3104, 0.3349] |
-| log lot size effect | 0.1365 | [0.1229, 0.1503] |
-| bedroom effect | -0.0147 | [-0.0254, -0.0040] |
-| bathroom effect | 0.2089 | [0.1936, 0.2240] |
-| sold-status effect | -0.0710 | [-0.0853, -0.0568] |
-| typical residual SD | 0.3875 | [0.3810, 0.3941] |
-| state SD | 0.4689 | [0.3663, 0.6200] |
-| ZIP SD | 0.4494 | [0.4237, 0.4773] |
+Run from the repository root. The full M2 fit can take many hours. Scripts reuse saved draws where supported.
 
-Posterior predictive checks show that M2 reproduces geographic heterogeneity well. It retains mild over-dispersion in the overall standardized log-price distribution:
-
-| Statistic | Observed | M2 replicated median |
-|---|---:|---:|
-| Overall IQR | 1.1087 | 1.2153 |
-| Overall 90th percentile | 1.1274 | 1.2182 |
-| ZIP mean variance | 0.5640 | 0.5759 |
-
-This is reported as a model-checking diagnostic rather than a fitting failure.
-
-## Repository structure
-
-```text
-data/
-  raw/                 local raw data, not versioned
-  processed/           derived analysis objects, not versioned
-models/                JAGS model specifications
-scripts/               R scripts for data preparation, modeling, diagnostics, and artifacts
-output/
-  figures/             generated figures
-  tables/              generated tables
-  mcmc/                large MCMC draw files, not versioned
-  logs/                runtime logs, not versioned
-report/                report source and rendered report files
-```
-
-## Reproducibility
-
-The project uses R, JAGS, and R packages recorded in `renv.lock`.
-
-Recommended setup:
-
-```r
-renv::restore()
-```
-
-The full analysis can be regenerated from the project root with:
-
-```powershell
+```sh
 Rscript scripts/01_data_audit.R
 Rscript scripts/02_make_sample.R
 Rscript scripts/03_prepare_jags_data.R
@@ -116,33 +60,9 @@ Rscript scripts/07_lightweight_dic.R
 Rscript scripts/07_model_comparison.R
 Rscript scripts/08_posterior_predictive_checks.R
 Rscript scripts/10_posterior_predictions.R
-Rscript scripts/11_sensitivity_analyses.R
 Rscript scripts/09_make_figures_tables.R
 ```
 
-The M2 fit is computationally expensive. Existing saved MCMC draw files are reused by default unless forced through the corresponding environment variables in the fitting scripts.
+To regenerate the HTML after the artifacts are in place, install Pandoc and run `Rscript -e 'rmarkdown::render("report/report.Rmd")'`. The report reads the saved tables and figures. The [legacy prior-sensitivity script](scripts/11_sensitivity_analyses.R) is separate from the selected M2 pipeline and expects the earlier M2 draws.
 
-## Key outputs
-
-Important generated tables include:
-
-- `output/tables/report_dic_heldout_model_comparison.csv`
-- `output/tables/report_m2_fixed_effect_variance_summary.csv`
-- `output/tables/report_posterior_predictive_test_statistics.csv`
-- `output/tables/report_heldout_predictive_metrics.csv`
-- `output/tables/report_artifact_manifest.csv`
-
-Important generated figures include:
-
-- `output/figures/m2_posterior_predictive_checks.png`
-- `output/figures/m2_posterior_prediction_intervals.png`
-- `output/figures/m2_fixed_effect_forest.png`
-- `output/figures/m2_state_effects_caterpillar.png`
-- `output/figures/m2_selected_zip_effects_caterpillar.png`
-- `output/figures/m2_variance_component_posteriors.png`
-
-The report source is available at `report/report.Rmd`.
-
-## License and citation
-
-This repository is intended for academic and reproducible-analysis use. The underlying data are governed by the terms of the Kaggle dataset source.
+</details>
